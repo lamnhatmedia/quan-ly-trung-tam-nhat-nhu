@@ -565,6 +565,7 @@ export default function App() {
               alt="Logo Trung tâm Nhật Như"
               className="w-full h-full object-contain"
             />
+          </div>
           <div>
             <p className="font-semibold leading-tight text-sm">Trung tâm Nhật Như</p>
           </div>
