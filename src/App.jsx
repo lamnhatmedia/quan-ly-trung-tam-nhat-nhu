@@ -13,8 +13,8 @@ import {
 const RAW_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_URL = RAW_SUPABASE_URL
   .trim()
-  .replace(/\\/+$/, "")
-  .replace(/(\\/rest\\/v1)+$/i, "");
+  .replace(/\/+$/, "")
+  .replace(/(\/rest\/v1)+$/i, "");
 
 const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
