@@ -393,7 +393,7 @@ function LoginScreen({ onLogin }) {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4" style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}>
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
         <div className="bg-teal-950 px-6 py-7 text-center">
-          <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-400 text-teal-950 flex items-center justify-center font-bold text-xl mb-3">NN</div>
+          <div className="w-8 h-8 rounded-lg bg-white p-1 flex items-center justify-center overflow-hidden"><img src={`${import.meta.env.BASE_URL}logo.png`} alt="Logo" className="w-full h-full object-contain" /></div>
           <h1 className="text-xl font-bold text-white">Quản lý Trung tâm Nhật Như</h1>
           <p className="text-sm text-teal-200 mt-1">Đăng nhập để tiếp tục</p>
         </div>
