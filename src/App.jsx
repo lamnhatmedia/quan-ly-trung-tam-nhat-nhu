@@ -4,6 +4,7 @@ import {
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import * as XLSX from "xlsx";
+import { createClient } from "@supabase/supabase-js";
 import {
   LayoutDashboard, Users, GraduationCap, CalendarDays,
   Star, Wallet, Receipt, UserCog, Settings2, Search, Plus, Pencil,
@@ -29,6 +30,18 @@ const WEEKDAYS = ["CN", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "
 // ---- Lưu trữ dữ liệu bền vững trên trình duyệt (localStorage) ----
 // Đổi APP_STORAGE_PREFIX khi cấu trúc dữ liệu thay đổi lớn để tránh xung đột dữ liệu cũ.
 const APP_STORAGE_PREFIX = "ntn_data_v1__";
+
+// ---- Đồng bộ dữ liệu Cloud bằng Supabase ----
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+const CLOUD_ROW_ID = "main";
+const CLOUD_DATA_VERSION = 1;
+
+const CLOUD_KEYS = [
+  "students", "classes", "teachers", "assistants", "rooms", "subjects",
+  "tuitionConfig", "enrollments", "payments", "paymentAllocations", "transactions", "users"
+];
 function usePersistentState(key, initialValue) {
   const [state, setState] = useState(() => {
     try {
@@ -84,43 +97,33 @@ const KHOI = [
 ============================================================================ */
 // Danh sách "kỳ phải thu" (theo từng môn, từng tháng) của 1 học sinh, tính từ tháng nhập học tới tháng `uptoMonth`.
 // Tự động cập nhật theo môn đăng ký hiện tại — không cần lưu hoá đơn tĩnh.
-// Tháng bắt đầu tính học phí cho 1 lượt đăng ký = tháng muộn hơn giữa "ngày nhập học" của học sinh
-// và "ngày bắt đầu lớp học" (nếu lớp có cấu hình ngày bắt đầu). Nhờ vậy học phí chỉ được tính từ
-// khi lớp thực sự khai giảng, thay vì lùi về những tháng trước đó.
-function enrollStartMonth(student, lop) {
-  const studentStart = (student.ngayNhapHoc || todayISO()).slice(0, 7);
-  const classStart = lop?.ngayBatDau ? lop.ngayBatDau.slice(0, 7) : null;
-  return classStart && classStart > studentStart ? classStart : studentStart;
-}
-function studentPeriods(student, enrollments, tuitionConfig, uptoMonth, classes = []) {
+function studentPeriods(student, enrollments, tuitionConfig, uptoMonth) {
   if (!student) return [];
   const myEnroll = enrollments.filter((e) => e.hocSinhId === student.id);
   if (!myEnroll.length) return [];
+  const startMonth = (student.ngayNhapHoc || todayISO()).slice(0, 7);
+  const months = monthsBetweenInclusive(startMonth, uptoMonth);
   const periods = [];
   myEnroll.forEach((en) => {
-    const lop = classes.find((c) => c.id === en.lopId);
-    const startMonth = enrollStartMonth(student, lop);
-    if (startMonth > uptoMonth) return;
-    const months = monthsBetweenInclusive(startMonth, uptoMonth);
     months.forEach((thang) => periods.push({ hocSinhId: student.id, lopId: en.lopId, monHocId: en.monHocId, thang, phaiThu: tuitionConfig.hocPhiMon }));
   });
   return periods;
 }
-function buildAllPeriods(students, enrollments, tuitionConfig, uptoMonth, classes = []) {
+function buildAllPeriods(students, enrollments, tuitionConfig, uptoMonth) {
   const list = [];
-  students.filter((s) => s.trangThai === "Đang học").forEach((st) => list.push(...studentPeriods(st, enrollments, tuitionConfig, uptoMonth, classes)));
+  students.filter((s) => s.trangThai === "Đang học").forEach((st) => list.push(...studentPeriods(st, enrollments, tuitionConfig, uptoMonth)));
   return list;
 }
 function allocatedOf(hocSinhId, lopId, monHocId, thang, paymentAllocations) {
   return paymentAllocations.filter((a) => a.hocSinhId === hocSinhId && a.lopId === lopId && a.monHocId === monHocId && a.thang === thang).reduce((s, a) => s + a.soTien, 0);
 }
 function periodStatus(phaiThu, daThu) { if (daThu <= 0) return "Chưa đóng"; if (daThu < phaiThu) return "Đóng một phần"; return "Đã đóng"; }
-function periodsForMonth(student, enrollments, tuitionConfig, thang, classes = []) {
+function periodsForMonth(student, enrollments, tuitionConfig, thang) {
   const myEnroll = enrollments.filter((e) => e.hocSinhId === student.id);
   if (!myEnroll.length) return [];
-  return myEnroll
-    .filter((en) => thang >= enrollStartMonth(student, classes.find((c) => c.id === en.lopId)))
-    .map((en) => ({ hocSinhId: student.id, lopId: en.lopId, monHocId: en.monHocId, thang, phaiThu: tuitionConfig.hocPhiMon }));
+  const startMonth = (student.ngayNhapHoc || todayISO()).slice(0, 7);
+  if (thang < startMonth) return [];
+  return myEnroll.map((en) => ({ hocSinhId: student.id, lopId: en.lopId, monHocId: en.monHocId, thang, phaiThu: tuitionConfig.hocPhiMon }));
 }
 function lastNMonths(n, uptoMonth) {
   const [y, m] = uptoMonth.split("-").map(Number);
@@ -362,11 +365,7 @@ function IconBtn({ onClick, icon: Icon, tone = "slate", title }) {
 }
 
 /* ============================================================================
-   ĐĂNG NHẬP NỘI BỘ
-   Tài khoản mặc định: admin
-   Mật khẩu mặc định: 123456
-   Lưu ý: đây là lớp bảo vệ giao diện phía client, không phải cơ chế bảo mật
-   cấp server. Dữ liệu ứng dụng vẫn được lưu theo cơ chế hiện có.
+   ĐĂNG NHẬP NỘI BỘ — không dùng Supabase Auth
 ============================================================================ */
 const LOGIN_USERNAME = "admin";
 const LOGIN_PASSWORD = "123456";
@@ -377,92 +376,32 @@ function LoginScreen({ onLogin }) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
-
   function submit(e) {
     e.preventDefault();
-    setError("");
-
     if (username.trim() === LOGIN_USERNAME && password === LOGIN_PASSWORD) {
       localStorage.setItem(LOGIN_STORAGE_KEY, "true");
       onLogin();
-      return;
-    }
-
-    setError("Tài khoản hoặc mật khẩu không đúng.");
+    } else setError("Tài khoản hoặc mật khẩu không đúng.");
   }
-
   return (
-    <div
-      className="min-h-screen bg-slate-50 flex items-center justify-center p-4"
-      style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}
-    >
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
-          <div className="bg-teal-950 px-6 py-7 text-center">
-            <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-400 text-teal-950 flex items-center justify-center font-bold text-xl mb-3">
-              NN
-            </div>
-            <h1 className="text-xl font-bold text-white">Quản lý Trung tâm Nhật Như</h1>
-            <p className="text-sm text-teal-200 mt-1">Đăng nhập để tiếp tục</p>
-          </div>
-
-          <form onSubmit={submit} className="p-6 space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-600 mb-1.5">
-                Tài khoản
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Nhập tài khoản"
-                autoComplete="username"
-                autoFocus
-                className={inputCls}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-600 mb-1.5">
-                Mật khẩu
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Nhập mật khẩu"
-                  autoComplete="current-password"
-                  className={cx(inputCls, "pr-20")}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-xs text-slate-500 hover:text-teal-700"
-                >
-                  {showPassword ? "Ẩn" : "Hiện"}
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <div className="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2.5 text-sm text-rose-700">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="w-full py-2.5 rounded-lg bg-teal-700 text-white font-medium hover:bg-teal-800 transition"
-            >
-              Đăng nhập
-            </button>
-          </form>
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4" style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}>
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+        <div className="bg-teal-950 px-6 py-7 text-center">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-400 text-teal-950 flex items-center justify-center font-bold text-xl mb-3">NN</div>
+          <h1 className="text-xl font-bold text-white">Quản lý Trung tâm Nhật Như</h1>
+          <p className="text-sm text-teal-200 mt-1">Đăng nhập để tiếp tục</p>
         </div>
-
-        <p className="text-center text-xs text-slate-400 mt-4">
-          Hệ thống quản lý Trung tâm Nhật Như
-        </p>
+        <form onSubmit={submit} className="p-6 space-y-4">
+          <div><label className="block text-sm font-medium text-slate-600 mb-1.5">Tài khoản</label>
+            <input value={username} onChange={e=>setUsername(e.target.value)} autoFocus autoComplete="username" placeholder="Nhập tài khoản" className={inputCls}/></div>
+          <div><label className="block text-sm font-medium text-slate-600 mb-1.5">Mật khẩu</label>
+            <div className="relative"><input type={showPassword?"text":"password"} value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" placeholder="Nhập mật khẩu" className={cx(inputCls,"pr-16")}/>
+              <button type="button" onClick={()=>setShowPassword(v=>!v)} className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-xs text-slate-500">{showPassword?"Ẩn":"Hiện"}</button>
+            </div>
+          </div>
+          {error && <div className="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2.5 text-sm text-rose-700">{error}</div>}
+          <button className="w-full py-2.5 rounded-lg bg-teal-700 text-white font-medium hover:bg-teal-800">Đăng nhập</button>
+        </form>
       </div>
     </div>
   );
@@ -492,21 +431,84 @@ export default function App() {
   const [syncLog, setSyncLog] = useState([{ time: new Date().toLocaleString("vi-VN"), msg: "Ứng dụng khởi tạo — dữ liệu được lưu tự động trên trình duyệt này." }]);
   const [sheetsCfg, setSheetsCfg] = usePersistentState("sheetsCfg", { url: "", lastSync: null, status: "offline" });
 
+  // Cloud sync state: dữ liệu vẫn được cache local để app mở nhanh, nhưng Supabase là nguồn đồng bộ chung.
+  const [cloudStatus, setCloudStatus] = useState(supabase ? "loading" : "not_configured");
+  const [cloudError, setCloudError] = useState("");
+  const [lastCloudSync, setLastCloudSync] = useState(null);
+  const cloudReadyRef = useRef(false);
+  const syncTimerRef = useRef(null);
+
+  const cloudSnapshot = useMemo(() => ({
+    version: CLOUD_DATA_VERSION,
+    updatedAt: new Date().toISOString(),
+    students, classes, teachers, assistants, rooms, subjects, tuitionConfig,
+    enrollments, payments, paymentAllocations, transactions, users,
+  }), [students, classes, teachers, assistants, rooms, subjects, tuitionConfig, enrollments, payments, paymentAllocations, transactions, users]);
+
+  async function loadCloudData() {
+    if (!supabase) {
+      setCloudStatus("not_configured");
+      setCloudError("Chưa cấu hình VITE_SUPABASE_URL và VITE_SUPABASE_ANON_KEY.");
+      cloudReadyRef.current = true;
+      return;
+    }
+    setCloudStatus("loading"); setCloudError("");
+    const { data, error } = await supabase.from("app_data").select("data, updated_at").eq("id", CLOUD_ROW_ID).maybeSingle();
+    if (error) {
+      setCloudStatus("error"); setCloudError(error.message); cloudReadyRef.current = true; return;
+    }
+    if (data?.data) {
+      const d = data.data;
+      if (Array.isArray(d.students)) setStudents(d.students);
+      if (Array.isArray(d.classes)) setClasses(d.classes);
+      if (Array.isArray(d.teachers)) setTeachers(d.teachers);
+      if (Array.isArray(d.assistants)) setAssistants(d.assistants);
+      if (Array.isArray(d.rooms)) setRooms(d.rooms);
+      if (Array.isArray(d.subjects)) setSubjects(d.subjects);
+      if (d.tuitionConfig) setTuitionConfig(d.tuitionConfig);
+      if (Array.isArray(d.enrollments)) setEnrollments(d.enrollments);
+      if (Array.isArray(d.payments)) setPayments(d.payments);
+      if (Array.isArray(d.paymentAllocations)) setPaymentAllocations(d.paymentAllocations);
+      if (Array.isArray(d.transactions)) setTransactions(d.transactions);
+      if (Array.isArray(d.users)) setUsers(d.users);
+      setLastCloudSync(data.updated_at || new Date().toISOString());
+      setCloudStatus("connected");
+    } else {
+      // Chưa có dữ liệu cloud: dùng dữ liệu hiện có trên trình duyệt này để tạo bản sao đầu tiên.
+      setCloudStatus("connected");
+    }
+    cloudReadyRef.current = true;
+  }
+
+  async function saveCloudData(snapshot = cloudSnapshot, silent = false) {
+    if (!supabase || !cloudReadyRef.current) return false;
+    if (!silent) setCloudStatus("saving");
+    const now = new Date().toISOString();
+    const payload = { ...snapshot, updatedAt: now };
+    const { error } = await supabase.from("app_data").upsert({ id: CLOUD_ROW_ID, data: payload, updated_at: now }, { onConflict: "id" });
+    if (error) {
+      setCloudStatus("error"); setCloudError(error.message); return false;
+    }
+    setLastCloudSync(now); setCloudStatus("connected"); setCloudError("");
+    return true;
+  }
+
+  useEffect(() => { loadCloudData(); return () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); }; }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!cloudReadyRef.current || !supabase) return;
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => saveCloudData(cloudSnapshot, true), 700);
+  }, [cloudSnapshot]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function syncNow() { return saveCloudData(cloudSnapshot); }
+
   /* ---------------- ui / auth state ---------------- */
   const [role, setRole] = usePersistentState("role", "Admin");
   const currentUser = users.find((u) => u.vaiTro === role) || users[0];
   const [view, setView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem(LOGIN_STORAGE_KEY) === "true");
-
-  function logout() {
-    localStorage.removeItem(LOGIN_STORAGE_KEY);
-    setIsLoggedIn(false);
-  }
-
-  if (!isLoggedIn) {
-    return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
-  }
 
   const lookups = { classes, teachers, assistants, rooms, students, subjects };
 
@@ -527,7 +529,10 @@ export default function App() {
 
   function logSync(msg) { setSyncLog((l) => [{ time: new Date().toLocaleString("vi-VN"), msg }, ...l].slice(0, 30)); }
 
-  const ctx = { students, setStudents, classes, setClasses, teachers, setTeachers, assistants, setAssistants, rooms, setRooms, subjects, setSubjects, tuitionConfig, setTuitionConfig, enrollments, setEnrollments, payments, setPayments, paymentAllocations, setPaymentAllocations, transactions, setTransactions, users, setUsers, lookups, role, logSync, sheetsCfg, setSheetsCfg, syncLog, resetAppData };
+  const logout = () => { localStorage.removeItem(LOGIN_STORAGE_KEY); setIsLoggedIn(false); };
+  const ctx = { students, setStudents, classes, setClasses, teachers, setTeachers, assistants, setAssistants, rooms, setRooms, subjects, setSubjects, tuitionConfig, setTuitionConfig, enrollments, setEnrollments, payments, setPayments, paymentAllocations, setPaymentAllocations, transactions, setTransactions, users, setUsers, lookups, role, logSync, sheetsCfg, setSheetsCfg, syncLog, resetAppData, cloudStatus, cloudError, lastCloudSync, syncNow, logout };
+
+  if (!isLoggedIn) return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex" style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}>
@@ -562,24 +567,18 @@ export default function App() {
           <button className="lg:hidden text-slate-500" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-slate-800">{NAV.find((n) => n.key === view)?.label}</h1>
           <div className="ml-auto flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full bg-teal-50 text-teal-700" title="Mọi thay đổi được lưu tự động vào trình duyệt này (localStorage), không cần bấm lưu.">
-              <CheckCircle2 size={13} /> Dữ liệu lưu tự động
+            <div className={cx("hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full", cloudStatus === "connected" ? "bg-emerald-50 text-emerald-700" : cloudStatus === "saving" || cloudStatus === "loading" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700")} title={cloudError || "Dữ liệu được tự động đồng bộ lên Supabase."}>
+              <CloudCog size={13} />
+              {cloudStatus === "connected" ? "Đã đồng bộ Cloud" : cloudStatus === "saving" ? "Đang lưu Cloud…" : cloudStatus === "loading" ? "Đang tải Cloud…" : cloudStatus === "not_configured" ? "Chưa cấu hình Cloud" : "Lỗi đồng bộ"}
             </div>
-            <div className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full bg-slate-100 text-slate-500">
-              <CloudCog size={13} className={sheetsCfg.status === "connected" ? "text-emerald-500" : "text-slate-400"} />
-              {sheetsCfg.status === "connected" ? "Đã kết nối Sheets" : "Chế độ offline"}
-            </div>
+            <button onClick={syncNow} className="hidden sm:inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50" title="Đồng bộ ngay">
+              <RefreshCw size={13} /> Đồng bộ
+            </button>
             <label className="text-xs text-slate-400 hidden md:block">Vai trò</label>
             <select value={role} onChange={(e) => setRole(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white">
               {ROLES.map((r) => <option key={r}>{r}</option>)}
             </select>
-            <button
-              onClick={logout}
-              className="px-2.5 py-1.5 rounded-lg text-sm border border-slate-200 text-slate-600 hover:bg-slate-50"
-              title="Đăng xuất"
-            >
-              Đăng xuất
-            </button>
+            <button onClick={logout} className="px-2.5 py-1.5 rounded-lg text-sm border border-slate-200 text-slate-600 hover:bg-slate-50">Đăng xuất</button>
           </div>
         </header>
         <main className="flex-1 p-4 lg:p-6 max-w-[1400px] w-full mx-auto">
@@ -606,7 +605,7 @@ function Dashboard({ students, classes, subjects, enrollments, tuitionConfig, te
   const activeStudents = students.filter((s) => s.trangThai === "Đang học");
   const thisMonth = todayISO().slice(0, 7);
 
-  const allPeriods = useMemo(() => buildAllPeriods(students, enrollments, tuitionConfig, thisMonth, classes).map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) })), [students, enrollments, tuitionConfig, paymentAllocations, thisMonth, classes]);
+  const allPeriods = useMemo(() => buildAllPeriods(students, enrollments, tuitionConfig, thisMonth).map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) })), [students, enrollments, tuitionConfig, paymentAllocations, thisMonth]);
   const periodsThisMonth = allPeriods.filter((p) => p.thang === thisMonth);
   const phaiThu = periodsThisMonth.reduce((s, p) => s + p.phaiThu, 0);
   const daThu = periodsThisMonth.reduce((s, p) => s + Math.min(p.daThu, p.phaiThu), 0);
@@ -716,7 +715,7 @@ function StudentsPage({ students, setStudents, classes, setClasses, subjects, se
 
   const rows = useMemo(() => (classFilter ? students.filter((s) => s.lopId === classFilter) : students), [students, classFilter]);
   const classOf = (id) => classes.find((c) => c.id === id)?.tenLop || "—";
-  const monthPeriods = (r) => periodsForMonth(r, enrollments, tuitionConfig, monthFilter, classes).map((p) => ({ ...p, daThu: Math.min(p.phaiThu, allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations)) }));
+  const monthPeriods = (r) => periodsForMonth(r, enrollments, tuitionConfig, monthFilter).map((p) => ({ ...p, daThu: Math.min(p.phaiThu, allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations)) }));
   const subjNamesForMonth = (r) => [...new Set(monthPeriods(r).map((p) => subjects.find((s) => s.id === p.monHocId)?.ten).filter(Boolean))];
 
   const columns = [
@@ -820,7 +819,7 @@ function StudentForm({ initial, classes, students, subjects, enrollments, onCanc
     else if (students.some((s) => s.maHS === f.maHS && s.id !== f.id)) e.maHS = "Mã học sinh đã tồn tại";
     if (!f.hoTen.trim()) e.hoTen = "Bắt buộc nhập họ tên";
     if (!f.lopId) e.lopId = "Chọn lớp học";
-    if (f.sdtPH.trim() && !/^0\d{9,10}$/.test(f.sdtPH)) e.sdtPH = "SĐT không hợp lệ";
+    if (!f.sdtPH.trim() || !/^0\d{9,10}$/.test(f.sdtPH)) e.sdtPH = "SĐT không hợp lệ";
     if (subIds.length < 1 || subIds.length > 3) e.subIds = "Chọn từ 1 đến 3 môn học (trong số môn lớp đang mở)";
     setErrs(e);
     return Object.keys(e).length === 0;
@@ -835,7 +834,7 @@ function StudentForm({ initial, classes, students, subjects, enrollments, onCanc
         <Field label="Lớp học" required error={errs.lopId}><Select value={f.lopId} onChange={(e) => set("lopId", e.target.value)} options={classes.map((c) => ({ value: c.id, label: c.tenLop }))} /></Field>
         <Field label="Trạng thái"><Select value={f.trangThai} onChange={(e) => set("trangThai", e.target.value)} options={[{ value: "Đang học", label: "Đang học" }, { value: "Nghỉ học", label: "Nghỉ học" }]} /></Field>
         <Field label="Tên phụ huynh"><TextInput value={f.tenPH} onChange={(e) => set("tenPH", e.target.value)} /></Field>
-        <Field label="SĐT phụ huynh" error={errs.sdtPH}><TextInput value={f.sdtPH} onChange={(e) => set("sdtPH", e.target.value)} placeholder="09xxxxxxxx" /></Field>
+        <Field label="SĐT phụ huynh" required error={errs.sdtPH}><TextInput value={f.sdtPH} onChange={(e) => set("sdtPH", e.target.value)} placeholder="09xxxxxxxx" /></Field>
         <Field label="Ngày nhập học"><TextInput type="date" value={f.ngayNhapHoc} onChange={(e) => set("ngayNhapHoc", e.target.value)} /></Field>
         <Field label="Địa chỉ"><TextInput value={f.diaChi} onChange={(e) => set("diaChi", e.target.value)} /></Field>
       </div>
@@ -863,7 +862,7 @@ function StudentForm({ initial, classes, students, subjects, enrollments, onCanc
 function StudentProfile({ student, classes, subjects, enrollments, tuitionConfig, paymentAllocations }) {
   const lop = classes.find((c) => c.id === student.lopId);
   const myEnroll = enrollments.filter((e) => e.hocSinhId === student.id);
-  const periods = studentPeriods(student, enrollments, tuitionConfig, todayISO().slice(0, 7), classes).map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) }));
+  const periods = studentPeriods(student, enrollments, tuitionConfig, todayISO().slice(0, 7)).map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) }));
   const debt = periods.reduce((s, p) => s + Math.max(0, p.phaiThu - p.daThu), 0);
   return (
     <div className="space-y-4 text-sm">
@@ -1176,7 +1175,6 @@ function ClassesPage({ classes, setClasses, students, subjects, setSubjects, enr
     { key: "maLop", label: "Mã lớp", sortable: true },
     { key: "tenLop", label: "Tên lớp", sortable: true, render: (r) => <button onClick={() => setDetailClass(r)} className="text-teal-700 font-medium hover:underline">{r.tenLop}</button> },
     { key: "khoiId", label: "Khối", render: (r) => KHOI.find((k) => k.id === r.khoiId)?.ten, exportValue: (r) => KHOI.find((k) => k.id === r.khoiId)?.ten },
-    { key: "ngayBatDau", label: "Ngày bắt đầu", sortable: true, render: (r) => r.ngayBatDau ? fmtDate(r.ngayBatDau) : "—", exportValue: (r) => r.ngayBatDau || "" },
     { key: "siso", label: "Sĩ số", render: (r) => students.filter((s) => s.lopId === r.id && s.trangThai === "Đang học").length, exportValue: (r) => students.filter((s) => s.lopId === r.id && s.trangThai === "Đang học").length },
     { key: "subjectIds", label: "Môn đang mở", render: (r) => (
       <div className="flex flex-wrap gap-1">{subjNames(r.subjectIds).map((n, i) => <Badge key={i} color="teal">{n}</Badge>)}{!subjNames(r.subjectIds).length && <span className="text-slate-300 text-xs">—</span>}</div>
@@ -1201,28 +1199,25 @@ function ClassesPage({ classes, setClasses, students, subjects, setSubjects, enr
         onConfirm={() => { if (students.some((s) => s.lopId === del.id && s.trangThai === "Đang học")) { alert("Không thể xoá: lớp vẫn còn học sinh đang học."); setDel(null); return; } setClasses((p) => p.filter((c) => c.id !== del.id)); setDel(null); }} />
 
       <Modal open={!!detailClass} onClose={() => setDetailClass(null)} title={`Lớp ${detailClass?.tenLop || ""} — Danh sách học sinh, môn đăng ký & học phí`} wide>
-        {detailClass && <ClassRoster lop={detailClass} classes={classes} students={students} subjects={subjects} enrollments={enrollments} paymentAllocations={paymentAllocations} tuitionConfig={tuitionConfig} />}
+        {detailClass && <ClassRoster lop={detailClass} students={students} subjects={subjects} enrollments={enrollments} paymentAllocations={paymentAllocations} tuitionConfig={tuitionConfig} />}
       </Modal>
     </div>
   );
 }
-function ClassRoster({ lop, classes, students, subjects, enrollments, paymentAllocations, tuitionConfig }) {
+function ClassRoster({ lop, students, subjects, enrollments, paymentAllocations, tuitionConfig }) {
   const roster = students.filter((s) => s.lopId === lop.id);
   const lopSubjects = subjects.filter((s) => (lop.subjectIds || []).includes(s.id));
   const thisMonth = todayISO().slice(0, 7);
-  // Nếu lớp có ngày bắt đầu ở tương lai, mặc định mở đúng tháng khai giảng thay vì tháng hiện tại.
-  const defaultMonth = lop.ngayBatDau && lop.ngayBatDau.slice(0, 7) > thisMonth ? lop.ngayBatDau.slice(0, 7) : thisMonth;
-  const [thang, setThang] = useState(defaultMonth);
   const [detailStu, setDetailStu] = useState(null);
 
   const rows = roster.map((s) => {
-    const myPeriods = periodsForMonth(s, enrollments, tuitionConfig, thang, classes).filter((p) => p.lopId === lop.id);
-    const myIds = myPeriods.map((p) => p.monHocId);
+    const myIds = enrollments.filter((e) => e.hocSinhId === s.id).map((e) => e.monHocId);
     const soMon = myIds.length;
-    const phaiDong = myPeriods.reduce((sum, p) => sum + p.phaiThu, 0);
-    const daDong = myIds.reduce((sum, monHocId) => sum + allocatedOf(s.id, lop.id, monHocId, thang, paymentAllocations), 0);
+    const tiLeHoc = lopSubjects.length ? Math.round((soMon / lopSubjects.length) * 100) : 0;
+    const phaiDong = soMon * (tuitionConfig?.hocPhiMon || 0);
+    const daDong = myIds.reduce((sum, monHocId) => sum + allocatedOf(s.id, lop.id, monHocId, thisMonth, paymentAllocations), 0);
     const trangThaiDong = periodStatus(phaiDong, daDong);
-    return { student: s, myIds, soMon, phaiDong, daDong: Math.min(daDong, phaiDong), trangThaiDong };
+    return { student: s, myIds, soMon, tiLeHoc, phaiDong, daDong: Math.min(daDong, phaiDong), trangThaiDong };
   });
 
   return (
@@ -1231,14 +1226,10 @@ function ClassRoster({ lop, classes, students, subjects, enrollments, paymentAll
         <span className="text-sm text-slate-500 mr-1">Môn đang mở:</span>
         {lopSubjects.map((s) => <Badge key={s.id} color="teal">{s.ten}</Badge>)}
         {!lopSubjects.length && <span className="text-xs text-slate-400">Chưa mở môn nào</span>}
-        {lop.ngayBatDau && <span className="text-xs text-slate-400">· Khai giảng {fmtDate(lop.ngayBatDau)}</span>}
-        <div className="flex items-center gap-1.5 ml-auto">
-          <span className="text-xs text-slate-400">Học phí tháng</span>
-          <TextInput type="month" value={thang} onChange={(e) => setThang(e.target.value)} className="w-36" />
-        </div>
+        <span className="text-xs text-slate-400 ml-auto">Học phí tháng {thisMonth}</span>
       </div>
       <div className="border border-slate-200 rounded-lg overflow-hidden overflow-x-auto">
-        <table className="w-full text-sm min-w-[780px]">
+        <table className="w-full text-sm min-w-[820px]">
           <thead>
             <tr className="bg-slate-50 text-slate-500 text-xs uppercase">
               <th className="px-3 py-2 text-left">STT</th>
@@ -1246,6 +1237,7 @@ function ClassRoster({ lop, classes, students, subjects, enrollments, paymentAll
               <th className="px-3 py-2 text-left">SĐT phụ huynh</th>
               {lopSubjects.map((s) => <th key={s.id} className="px-2 py-2 text-center">{s.ten}</th>)}
               <th className="px-2 py-2 text-center">Số môn đăng ký</th>
+              <th className="px-2 py-2 text-center">Tỉ lệ học</th>
               <th className="px-3 py-2 text-right">Học phí phải đóng</th>
               <th className="px-3 py-2 text-right">Số tiền đã đóng</th>
               <th className="px-3 py-2 text-left">Trạng thái</th>
@@ -1259,9 +1251,10 @@ function ClassRoster({ lop, classes, students, subjects, enrollments, paymentAll
                 <td className="px-3 py-2">{r.student.sdtPH}</td>
                 {lopSubjects.map((s) => <td key={s.id} className="px-2 py-2 text-center font-medium text-teal-600">{r.myIds.includes(s.id) ? "X" : ""}</td>)}
                 <td className="px-2 py-2 text-center">{r.soMon}</td>
+                <td className="px-2 py-2 text-center text-sky-600 font-medium">{r.tiLeHoc}%</td>
                 <td className="px-3 py-2 text-right">{vnd(r.phaiDong)}</td>
                 <td className="px-3 py-2 text-right text-teal-700 font-medium">{vnd(r.daDong)}</td>
-                <td className="px-3 py-2">{r.soMon > 0 ? statusBadge(r.trangThaiDong) : <span className="text-xs text-slate-300">Chưa đến kỳ</span>}</td>
+                <td className="px-3 py-2">{statusBadge(r.trangThaiDong)}</td>
               </tr>
             ))}
           </tbody>
@@ -1270,13 +1263,13 @@ function ClassRoster({ lop, classes, students, subjects, enrollments, paymentAll
       </div>
 
       <Modal open={!!detailStu} onClose={() => setDetailStu(null)} title={`Lịch sử đóng tiền — ${detailStu?.student?.hoTen || ""}`}>
-        {detailStu && <StudentPaymentHistory student={detailStu.student} classes={classes} subjects={subjects} enrollments={enrollments} paymentAllocations={paymentAllocations} tuitionConfig={tuitionConfig} />}
+        {detailStu && <StudentPaymentHistory student={detailStu.student} lop={lop} subjects={subjects} enrollments={enrollments} paymentAllocations={paymentAllocations} tuitionConfig={tuitionConfig} />}
       </Modal>
     </div>
   );
 }
-function StudentPaymentHistory({ student, classes, subjects, enrollments, paymentAllocations, tuitionConfig }) {
-  const periods = studentPeriods(student, enrollments, tuitionConfig, todayISO().slice(0, 7), classes)
+function StudentPaymentHistory({ student, subjects, enrollments, paymentAllocations, tuitionConfig }) {
+  const periods = studentPeriods(student, enrollments, tuitionConfig, todayISO().slice(0, 7))
     .map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) }))
     .sort((a, b) => b.thang.localeCompare(a.thang) || a.monHocId.localeCompare(b.monHocId));
   return (
@@ -1306,7 +1299,7 @@ function StudentPaymentHistory({ student, classes, subjects, enrollments, paymen
 }
 
 function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, setSubjects, onCancel, onSubmit }) {
-  const [f, setF] = useState(initial || { maLop: "", tenLop: "", khoiId: KHOI[0].id, gvId: teachers[0]?.id, troId: assistants[0]?.id, phongId: rooms[0]?.id, hocPhiBuoi: 100000, ngayBatDau: todayISO(), mon: "", subjectIds: [], lich: [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }] });
+  const [f, setF] = useState(initial || { maLop: "", tenLop: "", khoiId: KHOI[0].id, gvId: teachers[0]?.id, troId: assistants[0]?.id, phongId: rooms[0]?.id, hocPhiBuoi: 100000, mon: "", subjectIds: [], lich: [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }] });
   const [errs, setErrs] = useState({});
   const [newSubj, setNewSubj] = useState("");
   function set(k, v) { setF((p) => ({ ...p, [k]: v })); }
@@ -1350,10 +1343,6 @@ function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, se
         <Field label="Trợ giảng"><Select value={f.troId} onChange={(e) => set("troId", e.target.value)} options={assistants.map((t) => ({ value: t.id, label: t.hoTen }))} /></Field>
         <Field label="Phòng học"><Select value={f.phongId} onChange={(e) => set("phongId", e.target.value)} options={rooms.map((t) => ({ value: t.id, label: t.tenPhong }))} /></Field>
         <Field label="Học phí / buổi (đ)" required error={errs.hocPhiBuoi}><TextInput type="number" value={f.hocPhiBuoi} onChange={(e) => set("hocPhiBuoi", Number(e.target.value))} /></Field>
-        <Field label="Ngày bắt đầu lớp học">
-          <TextInput type="date" value={f.ngayBatDau || ""} onChange={(e) => set("ngayBatDau", e.target.value)} />
-          <p className="text-xs text-slate-400 mt-1">Dùng để tính học phí — chỉ thu học phí từ tháng khai giảng trở đi</p>
-        </Field>
       </div>
       <Field label="Môn học đang mở cho lớp (1–3 môn — dùng để học sinh đăng ký & tính học phí)" error={errs.subjectIds}>
         <div className="flex flex-wrap gap-2 mb-2">
@@ -1531,7 +1520,7 @@ function ThuTienPage({ students, classes, subjects, enrollments, payments, setPa
   const periodRows = useMemo(() => {
     const rows = [];
     students.filter((s) => s.trangThai === "Đang học").forEach((st) => {
-      const periods = studentPeriods(st, enrollments, tuitionConfig, thisMonth, classes);
+      const periods = studentPeriods(st, enrollments, tuitionConfig, thisMonth);
       const byMonth = {};
       periods.forEach((p) => {
         if (!byMonth[p.thang]) byMonth[p.thang] = { hocSinhId: st.id, lopId: st.lopId, thang: p.thang, soMon: 0, phaiThu: 0, daThu: 0 };
@@ -1542,7 +1531,7 @@ function ThuTienPage({ students, classes, subjects, enrollments, payments, setPa
       Object.values(byMonth).forEach((r) => rows.push(r));
     });
     return rows;
-  }, [students, enrollments, tuitionConfig, paymentAllocations, thisMonth, classes]);
+  }, [students, enrollments, tuitionConfig, paymentAllocations, thisMonth]);
 
   const [monthFilter, setMonthFilter] = useState(thisMonth);
   const [statusFilter, setStatusFilter] = useState("");
@@ -1639,11 +1628,11 @@ function ReceiptForm({ student, students, classes, subjects, enrollments, tuitio
     setHocSinhId(firstInClass?.id || "");
   }
 
-  const periods = useMemo(() => studentPeriods(stu, enrollments, tuitionConfig, thisMonth, classes)
+  const periods = useMemo(() => studentPeriods(stu, enrollments, tuitionConfig, thisMonth)
     .map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) }))
     .map((p) => ({ ...p, conThieu: Math.max(0, p.phaiThu - p.daThu) }))
     .filter((p) => p.conThieu > 0)
-    .sort((a, b) => a.thang.localeCompare(b.thang) || a.monHocId.localeCompare(b.monHocId)), [stu, enrollments, tuitionConfig, paymentAllocations, thisMonth, classes]);
+    .sort((a, b) => a.thang.localeCompare(b.thang) || a.monHocId.localeCompare(b.monHocId)), [stu, enrollments, tuitionConfig, paymentAllocations, thisMonth]);
 
   const [checked, setChecked] = useState(() => new Set(periods.map((_, i) => i)));
   useEffect(() => { setChecked(new Set(periods.map((_, i) => i))); }, [hocSinhId]); // eslint-disable-line
@@ -1818,7 +1807,7 @@ function ReportsPage({ transactions, payments, paymentAllocations, students, cla
   const chi = transactions.filter((t) => t.loai === "Chi" && t.ngay.startsWith(thang)).reduce((s, t) => s + t.soTien, 0);
   const doanhThu = revenueHP + revenueOther;
   const loiNhuan = doanhThu - chi;
-  const allPeriods = buildAllPeriods(students, enrollments, tuitionConfig, todayISO().slice(0, 7), classes).map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) }));
+  const allPeriods = buildAllPeriods(students, enrollments, tuitionConfig, todayISO().slice(0, 7)).map((p) => ({ ...p, daThu: allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations) }));
   const congNo = allPeriods.reduce((s, p) => s + Math.max(0, p.phaiThu - p.daThu), 0);
 
   const byClass = classes.map((c) => {
