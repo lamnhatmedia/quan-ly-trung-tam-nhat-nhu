@@ -424,6 +424,11 @@ export default function App() {
      vào localStorage của trình duyệt này qua usePersistentState. */
   const [students, setStudents] = usePersistentState("students", []);
   const [classes, setClasses] = usePersistentState("classes", []);
+  useEffect(() => {
+    if (!Array.isArray(classes)) { setClasses([]); return; }
+    const needsFix = classes.some((c) => !Array.isArray(c?.lich) || !Array.isArray(c?.subjectIds));
+    if (needsFix) setClasses(classes.map((c) => ({ ...c, subjectIds: Array.isArray(c?.subjectIds) ? c.subjectIds : [], lich: Array.isArray(c?.lich) ? c.lich : [] })));
+  }, [classes, setClasses]);
   const [teachers, setTeachers] = usePersistentState("teachers", []);
   const [assistants, setAssistants] = usePersistentState("assistants", []);
   const [rooms, setRooms] = usePersistentState("rooms", []);
@@ -1197,7 +1202,7 @@ function ClassesPage({ classes, setClasses, students, subjects, setSubjects, enr
     ), exportValue: (r) => subjNames(r.subjectIds).join(", ") },
     { key: "gvId", label: "Giáo viên", render: (r) => nameOf(teachers, r.gvId), exportValue: (r) => nameOf(teachers, r.gvId) },
     { key: "phongId", label: "Phòng", render: (r) => nameOf(rooms, r.phongId, "tenPhong"), exportValue: (r) => nameOf(rooms, r.phongId, "tenPhong") },
-    { key: "lich", label: "Lịch học", render: (r) => r.lich.map((l) => WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]).join(", "), exportValue: (r) => r.lich.map((l) => `${WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]} ${l.gioBD}-${l.gioKT}`).join(" | ") },
+    { key: "lich", label: "Lịch học", render: (r) => (Array.isArray(r.lich) ? r.lich : []).map((l) => WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]).join(", "), exportValue: (r) => (Array.isArray(r.lich) ? r.lich : []).map((l) => `${WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]} ${l.gioBD}-${l.gioKT}`).join(" | ") },
     ...(editable ? [{ key: "actions", label: "", render: (r) => (
       <div className="flex gap-1"><IconBtn icon={Eye} tone="slate" title="Xem học sinh" onClick={() => setDetailClass(r)} /><IconBtn icon={Pencil} tone="teal" onClick={() => setModal({ mode: "edit", data: r })} /><IconBtn icon={Trash2} tone="rose" onClick={() => setDel(r)} /></div>
     ) }] : []),
@@ -1320,7 +1325,7 @@ function StudentPaymentHistory({ student, classes, subjects, enrollments, paymen
 }
 
 function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, setSubjects, onCancel, onSubmit }) {
-  const [f, setF] = useState(initial || { maLop: "", tenLop: "", khoiId: KHOI[0].id, gvId: teachers[0]?.id, troId: assistants[0]?.id, phongId: rooms[0]?.id, hocPhiBuoi: 100000, ngayBatDau: todayISO(), mon: "", subjectIds: [], lich: [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }] });
+  const [f, setF] = useState(() => ({ ...(initial || { maLop: "", tenLop: "", khoiId: KHOI[0].id, gvId: teachers[0]?.id, troId: assistants[0]?.id, phongId: rooms[0]?.id, hocPhiBuoi: 100000, ngayBatDau: todayISO(), mon: "", subjectIds: [], lich: [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }] }), lich: Array.isArray(initial?.lich) && initial.lich.length ? initial.lich : [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }], subjectIds: Array.isArray(initial?.subjectIds) ? initial.subjectIds : [] }));
   const [errs, setErrs] = useState({});
   const [newSubj, setNewSubj] = useState("");
   function set(k, v) { setF((p) => ({ ...p, [k]: v })); }
@@ -1348,7 +1353,7 @@ function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, se
     if (!f.hocPhiBuoi || f.hocPhiBuoi <= 0) e.hocPhiBuoi = "Học phí phải > 0";
     if (!f.subjectIds || f.subjectIds.length < 1 || f.subjectIds.length > 3) e.subjectIds = "Chọn 1 đến 3 môn học đang mở cho lớp";
     // schedule conflict: same phong or same gv, overlapping day+time, excluding self
-    const conflict = classes.find((c) => c.id !== f.id && (c.phongId === f.phongId || c.gvId === f.gvId) && c.lich.some((s1) => f.lich.some((s2) => s1.thu === s2.thu && timeOverlap(s1, s2))));
+    const conflict = classes.find((c) => c.id !== f.id && (c.phongId === f.phongId || c.gvId === f.gvId) && (Array.isArray(c.lich) ? c.lich : []).some((s1) => (Array.isArray(f.lich) ? f.lich : []).some((s2) => s1.thu === s2.thu && timeOverlap(s1, s2))));
     if (conflict) e.lich = `Trùng lịch với lớp "${conflict.tenLop}" (cùng phòng hoặc cùng giáo viên)`;
     setErrs(e);
     return Object.keys(e).length === 0;
@@ -1482,7 +1487,7 @@ function SchedulePage({ classes, teachers, rooms }) {
     for (let i = 0; i < classes.length; i++) for (let j = i + 1; j < classes.length; j++) {
       const a = classes[i], b = classes[j];
       if (a.phongId !== b.phongId && a.gvId !== b.gvId) continue;
-      a.lich.forEach((s1) => b.lich.forEach((s2) => { if (s1.thu === s2.thu && timeOverlap(s1, s2)) list.push({ a, b, s1, reason: a.phongId === b.phongId ? "Trùng phòng học" : "Trùng giáo viên" }); }));
+      (Array.isArray(a.lich) ? a.lich : []).forEach((s1) => (Array.isArray(b.lich) ? b.lich : []).forEach((s2) => { if (s1.thu === s2.thu && timeOverlap(s1, s2)) list.push({ a, b, s1, reason: a.phongId === b.phongId ? "Trùng phòng học" : "Trùng giáo viên" }); }));
     }
     return list;
   }, [classes]);
@@ -1511,14 +1516,14 @@ function SchedulePage({ classes, teachers, rooms }) {
             <div key={d}>
               <p className="text-xs font-semibold text-center text-slate-500 mb-2 pb-1 border-b border-slate-200">{WEEKDAYS[d === 0 ? 0 : d - 1]}</p>
               <div className="space-y-1.5">
-                {classes.filter((c) => c.lich.some((s) => s.thu === d)).flatMap((c) => c.lich.filter((s) => s.thu === d).map((s, i) => (
+                {classes.filter((c) => (Array.isArray(c.lich) ? c.lich : []).some((s) => s.thu === d)).flatMap((c) => (Array.isArray(c.lich) ? c.lich : []).filter((s) => s.thu === d).map((s, i) => (
                   <div key={c.id + i} className="rounded-lg bg-teal-50 border border-teal-100 p-2 text-[11px]">
                     <p className="font-semibold text-teal-800">{c.tenLop}</p>
                     <p className="text-teal-600">{s.gioBD}-{s.gioKT}</p>
                     <p className="text-teal-500">{gvName(c.gvId)} · {roomName(c.phongId)}</p>
                   </div>
                 )))}
-                {!classes.some((c) => c.lich.some((s) => s.thu === d)) && <p className="text-[11px] text-slate-300 text-center pt-4">—</p>}
+                {!classes.some((c) => (Array.isArray(c.lich) ? c.lich : []).some((s) => s.thu === d)) && <p className="text-[11px] text-slate-300 text-center pt-4">—</p>}
               </div>
             </div>
           ))}
