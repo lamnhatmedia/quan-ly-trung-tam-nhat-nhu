@@ -7,7 +7,15 @@ import {
   FileSpreadsheet, Cloud, CloudOff
 } from "lucide-react";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+// Supabase project URL phải là dạng:
+// https://YOUR_PROJECT_REF.supabase.co
+// KHÔNG thêm /rest/v1 vì Supabase JS tự thêm đường dẫn REST.
+const RAW_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_URL = RAW_SUPABASE_URL
+  .trim()
+  .replace(/\\/+$/, "")
+  .replace(/(\\/rest\\/v1)+$/i, "");
+
 const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
