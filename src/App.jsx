@@ -26,86 +26,26 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000)
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 const WEEKDAYS = ["CN", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
 
-// ---- Lưu dữ liệu: localStorage + Supabase cloud backup ----
-const APP_STORAGE_PREFIX = "ntn_data_v2__";
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
-const SESSION_KEY = "ntn_supabase_session_v1";
-const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? {
-  async signInWithPassword({ email, password }) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-    const data = await res.json();
-    if (!res.ok) return { data: null, error: data };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(data));
-    return { data, error: null };
-  },
-  async getSession() { try { return { data: { session: JSON.parse(localStorage.getItem(SESSION_KEY) || "null") } }; } catch { return { data: { session: null } }; } },
-  async getToken() {
-    let session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
-    if (!session) return null;
-    const expiresAt = Number(session.expires_at || 0) * 1000;
-    if (expiresAt && expiresAt - Date.now() < 60000 && session.refresh_token) {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: session.refresh_token }) });
-      if (res.ok) { session = await res.json(); localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
-    }
-    return session.access_token || null;
-  },
-  async signOut() { localStorage.removeItem(SESSION_KEY); window.location.reload(); },
-  async stateSelect(userId, key) {
-    const token = await this.getToken();
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/app_state?user_id=eq.${encodeURIComponent(userId)}&key=eq.${encodeURIComponent(key)}&select=data`, { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token || SUPABASE_ANON_KEY}` } });
-    const data = await res.json(); return { data: Array.isArray(data) ? data[0] : null, error: res.ok ? null : data };
-  },
-  async stateUpsert(userId, key, data) {
-    const token = await this.getToken();
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/app_state?on_conflict=user_id,key`, { method: "POST", headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token || SUPABASE_ANON_KEY}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify({ user_id: userId, key, data, updated_at: new Date().toISOString() }) });
-    return res.ok;
-  },
-  async stateDelete(userId) {
-    const token = await this.getToken();
-    return fetch(`${SUPABASE_URL}/rest/v1/app_state?user_id=eq.${encodeURIComponent(userId)}`, { method: "DELETE", headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token || SUPABASE_ANON_KEY}` } });
-  }
-} : null;
-
-function getInitialValue(initialValue) { return typeof initialValue === "function" ? initialValue() : initialValue; }
+// ---- Lưu trữ dữ liệu bền vững trên trình duyệt (localStorage) ----
+// Đổi APP_STORAGE_PREFIX khi cấu trúc dữ liệu thay đổi lớn để tránh xung đột dữ liệu cũ.
+const APP_STORAGE_PREFIX = "ntn_data_v1__";
 function usePersistentState(key, initialValue) {
   const [state, setState] = useState(() => {
-    try { const raw = localStorage.getItem(APP_STORAGE_PREFIX + key); if (raw != null) return JSON.parse(raw); } catch (e) {}
-    return getInitialValue(initialValue);
+    try {
+      const raw = localStorage.getItem(APP_STORAGE_PREFIX + key);
+      if (raw != null) return JSON.parse(raw);
+    } catch (e) { /* dữ liệu lưu bị hỏng, dùng dữ liệu mặc định */ }
+    return typeof initialValue === "function" ? initialValue() : initialValue;
   });
-  const loadedRef = useRef(false);
-  const saveTimer = useRef(null);
   useEffect(() => {
-    let cancelled = false;
-    async function loadCloud() {
-      if (!supabase || !window.__NTN_USER__?.id) { loadedRef.current = true; return; }
-      const { data, error } = await supabase.stateSelect(window.__NTN_USER__.id, key);
-      if (!cancelled && !error && data?.data !== undefined) { setState(data.data); try { localStorage.setItem(APP_STORAGE_PREFIX + key, JSON.stringify(data.data)); } catch (e) {} }
-      loadedRef.current = true;
-    }
-    loadCloud();
-    return () => { cancelled = true; };
-  }, [key]);
-  useEffect(() => {
-    try { localStorage.setItem(APP_STORAGE_PREFIX + key, JSON.stringify(state)); } catch (e) {}
-    if (!loadedRef.current || !supabase || !window.__NTN_USER__?.id) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      await supabase.stateUpsert(window.__NTN_USER__.id, key, state);
-    }, 350);
-    return () => clearTimeout(saveTimer.current);
+    try { localStorage.setItem(APP_STORAGE_PREFIX + key, JSON.stringify(state)); } catch (e) { /* bộ nhớ đầy hoặc không khả dụng */ }
   }, [key, state]);
   return [state, setState];
 }
-async function clearCloudData() {
-  if (supabase && window.__NTN_USER__?.id) await supabase.stateDelete(window.__NTN_USER__.id);
-}
 function resetAppData() {
-  if (!window.confirm("Xoá toàn bộ dữ liệu đã lưu trên cloud và trình duyệt này? Hành động này không thể hoàn tác.")) return;
-  clearCloudData().finally(() => {
-    Object.keys(localStorage).filter((k) => k.startsWith(APP_STORAGE_PREFIX)).forEach((k) => localStorage.removeItem(k));
-    window.location.reload();
-  });
+  if (!window.confirm("Xoá toàn bộ dữ liệu đã lưu trên trình duyệt này và đưa ứng dụng về trạng thái trống ban đầu? Hành động này không thể hoàn tác.")) return;
+  Object.keys(localStorage).filter((k) => k.startsWith(APP_STORAGE_PREFIX)).forEach((k) => localStorage.removeItem(k));
+  window.location.reload();
 }
 function monthsBetweenInclusive(startYM, endYM) {
   if (!startYM || !endYM) return [];
@@ -422,12 +362,121 @@ function IconBtn({ onClick, icon: Icon, tone = "slate", title }) {
 }
 
 /* ============================================================================
+   ĐĂNG NHẬP NỘI BỘ
+   Tài khoản mặc định: admin
+   Mật khẩu mặc định: 123456
+   Lưu ý: đây là lớp bảo vệ giao diện phía client, không phải cơ chế bảo mật
+   cấp server. Dữ liệu ứng dụng vẫn được lưu theo cơ chế hiện có.
+============================================================================ */
+const LOGIN_USERNAME = "admin";
+const LOGIN_PASSWORD = "123456";
+const LOGIN_STORAGE_KEY = "ntn_authenticated_v1";
+
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+
+  function submit(e) {
+    e.preventDefault();
+    setError("");
+
+    if (username.trim() === LOGIN_USERNAME && password === LOGIN_PASSWORD) {
+      localStorage.setItem(LOGIN_STORAGE_KEY, "true");
+      onLogin();
+      return;
+    }
+
+    setError("Tài khoản hoặc mật khẩu không đúng.");
+  }
+
+  return (
+    <div
+      className="min-h-screen bg-slate-50 flex items-center justify-center p-4"
+      style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}
+    >
+      <div className="w-full max-w-md">
+        <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+          <div className="bg-teal-950 px-6 py-7 text-center">
+            <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-400 text-teal-950 flex items-center justify-center font-bold text-xl mb-3">
+              NN
+            </div>
+            <h1 className="text-xl font-bold text-white">Quản lý Trung tâm Nhật Như</h1>
+            <p className="text-sm text-teal-200 mt-1">Đăng nhập để tiếp tục</p>
+          </div>
+
+          <form onSubmit={submit} className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-600 mb-1.5">
+                Tài khoản
+              </label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Nhập tài khoản"
+                autoComplete="username"
+                autoFocus
+                className={inputCls}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-600 mb-1.5">
+                Mật khẩu
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Nhập mật khẩu"
+                  autoComplete="current-password"
+                  className={cx(inputCls, "pr-20")}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-xs text-slate-500 hover:text-teal-700"
+                >
+                  {showPassword ? "Ẩn" : "Hiện"}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div className="rounded-lg bg-rose-50 border border-rose-200 px-3 py-2.5 text-sm text-rose-700">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full py-2.5 rounded-lg bg-teal-700 text-white font-medium hover:bg-teal-800 transition"
+            >
+              Đăng nhập
+            </button>
+          </form>
+        </div>
+
+        <p className="text-center text-xs text-slate-400 mt-4">
+          Hệ thống quản lý Trung tâm Nhật Như
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
    MAIN APP
 ============================================================================ */
-function AppInner() {
+export default function App() {
   useEffect(() => { document.title = "Quản lý Trung tâm Nhật Như"; }, []);
 
-  /* ---------------- dữ liệu trung tâm: localStorage + tự động backup Supabase ---------------- */
+  /* ---------------- core data state (tự động lưu vào localStorage của trình duyệt) ----------------
+     Ứng dụng khởi động với dữ liệu TRỐNG (không có dữ liệu mẫu/demo). Mọi thay đổi được lưu tự động
+     vào localStorage của trình duyệt này qua usePersistentState. */
   const [students, setStudents] = usePersistentState("students", []);
   const [classes, setClasses] = usePersistentState("classes", []);
   const [teachers, setTeachers] = usePersistentState("teachers", []);
@@ -448,6 +497,16 @@ function AppInner() {
   const currentUser = users.find((u) => u.vaiTro === role) || users[0];
   const [view, setView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem(LOGIN_STORAGE_KEY) === "true");
+
+  function logout() {
+    localStorage.removeItem(LOGIN_STORAGE_KEY);
+    setIsLoggedIn(false);
+  }
+
+  if (!isLoggedIn) {
+    return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
+  }
 
   const lookups = { classes, teachers, assistants, rooms, students, subjects };
 
@@ -503,18 +562,24 @@ function AppInner() {
           <button className="lg:hidden text-slate-500" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
           <h1 className="font-semibold text-slate-800">{NAV.find((n) => n.key === view)?.label}</h1>
           <div className="ml-auto flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full bg-teal-50 text-teal-700" title="Mọi thay đổi được lưu tự động lên cloud và có bản lưu trên trình duyệt.">
+            <div className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full bg-teal-50 text-teal-700" title="Mọi thay đổi được lưu tự động vào trình duyệt này (localStorage), không cần bấm lưu.">
               <CheckCircle2 size={13} /> Dữ liệu lưu tự động
             </div>
             <div className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full bg-slate-100 text-slate-500">
               <CloudCog size={13} className={sheetsCfg.status === "connected" ? "text-emerald-500" : "text-slate-400"} />
-              {supabase ? "Đã kết nối Cloud" : "Chưa cấu hình Cloud"}
+              {sheetsCfg.status === "connected" ? "Đã kết nối Sheets" : "Chế độ offline"}
             </div>
             <label className="text-xs text-slate-400 hidden md:block">Vai trò</label>
             <select value={role} onChange={(e) => setRole(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white">
               {ROLES.map((r) => <option key={r}>{r}</option>)}
             </select>
-            {supabase && <button onClick={() => supabase.signOut()} className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">Đăng xuất</button>}
+            <button
+              onClick={logout}
+              className="px-2.5 py-1.5 rounded-lg text-sm border border-slate-200 text-slate-600 hover:bg-slate-50"
+              title="Đăng xuất"
+            >
+              Đăng xuất
+            </button>
           </div>
         </header>
         <main className="flex-1 p-4 lg:p-6 max-w-[1400px] w-full mx-auto">
@@ -1937,42 +2002,3 @@ function SyncPage({ sheetsCfg, setSheetsCfg, logSync, syncLog, students, classes
   );
 }
 function flattenForSheet(row) { const o = {}; Object.entries(row).forEach(([k, v]) => { o[k] = typeof v === "object" ? JSON.stringify(v) : v; }); return o; }
-
-
-function AuthGate() {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (!supabase) { setLoading(false); return; }
-    supabase.getSession().then(({ data }) => { setSession(data.session); setLoading(false); });
-  }, []);
-  if (!supabase) return <SetupScreen />;
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500">Đang kết nối dữ liệu cloud...</div>;
-  if (!session) return <LoginScreen email={email} setEmail={setEmail} password={password} setPassword={setPassword} error={error} setError={setError} />;
-  window.__NTN_USER__ = session.user;
-  return <AppInner />;
-}
-
-function LoginScreen({ email, setEmail, password, setPassword, error, setError }) {
-  async function login(e) {
-    e.preventDefault(); setError("");
-    const { error } = await supabase.signInWithPassword({ email: email.trim(), password });
-    if (error) setError("Email hoặc mật khẩu không đúng.");
-  }
-  return <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-    <form onSubmit={login} className="w-full max-w-md bg-white rounded-2xl shadow-sm border border-slate-200 p-7 space-y-4">
-      <div><div className="w-11 h-11 rounded-xl bg-teal-700 text-white flex items-center justify-center font-bold mb-3">NN</div><h1 className="text-xl font-bold">Quản lý Trung tâm Nhật Như</h1><p className="text-sm text-slate-500 mt-1">Đăng nhập để dữ liệu được đồng bộ và tự động sao lưu.</p></div>
-      <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required placeholder="Email quản trị" className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm" />
-      <input value={password} onChange={e=>setPassword(e.target.value)} type="password" required placeholder="Mật khẩu" className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm" />
-      {error && <p className="text-sm text-rose-600">{error}</p>}
-      <button className="w-full bg-teal-700 hover:bg-teal-800 text-white rounded-lg py-2.5 text-sm font-medium">Đăng nhập</button>
-    </form></div>;
-}
-function SetupScreen() {
-  return <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4"><div className="max-w-lg bg-white border border-slate-200 rounded-2xl p-7 shadow-sm"><h1 className="text-xl font-bold mb-2">Quản lý Trung tâm Nhật Như</h1><p className="text-sm text-slate-600">Website chưa được cấu hình Supabase. Hãy tạo file <code>.env</code> với <code>VITE_SUPABASE_URL</code> và <code>VITE_SUPABASE_ANON_KEY</code>, sau đó build/deploy lại.</p></div></div>;
-}
-
-export default function App() { return <AuthGate />; }
