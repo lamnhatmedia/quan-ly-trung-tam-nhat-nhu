@@ -559,7 +559,12 @@ export default function App() {
       {/* Sidebar */}
       <aside className={cx("fixed lg:static z-40 inset-y-0 left-0 w-64 bg-teal-950 text-teal-50 flex flex-col transition-transform duration-200", sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0")}>
         <div className="flex items-center gap-2 px-5 h-16 border-b border-teal-900 shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-amber-400 text-teal-950 flex items-center justify-center font-bold">NN</div>
+          <div className="w-8 h-8 rounded-lg bg-white p-1 flex items-center justify-center overflow-hidden">
+            <img
+              src={`${import.meta.env.BASE_URL}logo.png`}
+              alt="Logo Trung tâm Nhật Như"
+              className="w-full h-full object-contain"
+            />
           <div>
             <p className="font-semibold leading-tight text-sm">Trung tâm Nhật Như</p>
           </div>
