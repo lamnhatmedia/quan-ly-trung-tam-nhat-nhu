@@ -158,6 +158,7 @@ const PERMISSIONS = {
   reports: { Admin: "full", "Kế toán": "full", "Giáo viên": "view", "Trợ giảng": "none" },
   users: { Admin: "full", "Kế toán": "none", "Giáo viên": "none", "Trợ giảng": "none" },
   sync: { Admin: "full", "Kế toán": "none", "Giáo viên": "none", "Trợ giảng": "none" },
+  teacherSalary: { Admin: "full", "Kế toán": "full", "Giáo viên": "view", "Trợ giảng": "none" },
 };
 const can = (role, moduleKey, level = "view") => {
   const acc = PERMISSIONS[moduleKey]?.[role] || "none";
@@ -439,6 +440,9 @@ export default function App() {
   const [paymentAllocations, setPaymentAllocations] = usePersistentState("paymentAllocations", []);
   const [transactions, setTransactions] = usePersistentState("transactions", []);
   const [users, setUsers] = usePersistentState("users", []);
+  const [teacherSalaryConfigs, setTeacherSalaryConfigs] = usePersistentState("teacherSalaryConfigs", []);
+  const [teacherSalaryClosures, setTeacherSalaryClosures] = usePersistentState("teacherSalaryClosures", []);
+  const [teacherSalaryPayments, setTeacherSalaryPayments] = usePersistentState("teacherSalaryPayments", []);
   const [syncLog, setSyncLog] = useState([{ time: new Date().toLocaleString("vi-VN"), msg: "Ứng dụng khởi tạo — dữ liệu được lưu tự động trên trình duyệt này." }]);
   const [sheetsCfg, setSheetsCfg] = usePersistentState("sheetsCfg", { url: "", lastSync: null, status: "offline" });
 
@@ -453,8 +457,8 @@ export default function App() {
     version: CLOUD_DATA_VERSION,
     updatedAt: new Date().toISOString(),
     students, classes, teachers, assistants, rooms, subjects, tuitionConfig,
-    enrollments, payments, paymentAllocations, transactions, users,
-  }), [students, classes, teachers, assistants, rooms, subjects, tuitionConfig, enrollments, payments, paymentAllocations, transactions, users]);
+    enrollments, payments, paymentAllocations, transactions, users, teacherSalaryConfigs, teacherSalaryClosures, teacherSalaryPayments,
+  }), [students, classes, teachers, assistants, rooms, subjects, tuitionConfig, enrollments, payments, paymentAllocations, transactions, users, teacherSalaryConfigs, teacherSalaryClosures, teacherSalaryPayments]);
 
   async function loadCloudData() {
     if (!supabase) {
@@ -482,6 +486,9 @@ export default function App() {
       if (Array.isArray(d.paymentAllocations)) setPaymentAllocations(d.paymentAllocations);
       if (Array.isArray(d.transactions)) setTransactions(d.transactions);
       if (Array.isArray(d.users)) setUsers(d.users);
+      if (Array.isArray(d.teacherSalaryConfigs)) setTeacherSalaryConfigs(d.teacherSalaryConfigs);
+      if (Array.isArray(d.teacherSalaryClosures)) setTeacherSalaryClosures(d.teacherSalaryClosures);
+      if (Array.isArray(d.teacherSalaryPayments)) setTeacherSalaryPayments(d.teacherSalaryPayments);
       setLastCloudSync(data.updated_at || new Date().toISOString());
       setCloudStatus("connected");
     } else {
@@ -539,6 +546,7 @@ export default function App() {
     { key: "schedule", label: "Thời khoá biểu", icon: CalendarDays },
     { key: "thuTien", label: "Thu tiền", icon: Receipt },
     { key: "transactions", label: "Thu chi", icon: Wallet },
+    { key: "teacherSalary", label: "Tính lương giáo viên", icon: BadgeCheck },
     { key: "reports", label: "Báo cáo", icon: FileSpreadsheet },
     { key: "users", label: "Người dùng", icon: UserCog },
     { key: "sync", label: "Đồng bộ Google Sheets", icon: CloudCog },
@@ -550,7 +558,7 @@ export default function App() {
 
   const logout = () => { localStorage.removeItem(LOGIN_STORAGE_KEY); setIsLoggedIn(false); };
 
-  const ctx = { students, setStudents, classes, setClasses, teachers, setTeachers, assistants, setAssistants, rooms, setRooms, subjects, setSubjects, tuitionConfig, setTuitionConfig, enrollments, setEnrollments, payments, setPayments, paymentAllocations, setPaymentAllocations, transactions, setTransactions, users, setUsers, lookups, role, logSync, sheetsCfg, setSheetsCfg, syncLog, resetAppData, cloudStatus, cloudError, lastCloudSync, syncNow, logout };
+  const ctx = { students, setStudents, classes, setClasses, teachers, setTeachers, assistants, setAssistants, rooms, setRooms, subjects, setSubjects, tuitionConfig, setTuitionConfig, enrollments, setEnrollments, payments, setPayments, paymentAllocations, setPaymentAllocations, transactions, setTransactions, users, setUsers, teacherSalaryConfigs, setTeacherSalaryConfigs, teacherSalaryClosures, setTeacherSalaryClosures, teacherSalaryPayments, setTeacherSalaryPayments, lookups, role, logSync, sheetsCfg, setSheetsCfg, syncLog, resetAppData, cloudStatus, cloudError, lastCloudSync, syncNow, logout };
 
   if (!isLoggedIn) return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
 
@@ -615,6 +623,7 @@ export default function App() {
           {view === "schedule" && <SchedulePage {...ctx} />}
           {view === "thuTien" && <ThuTienPage {...ctx} />}
           {view === "transactions" && <TransactionsPage {...ctx} />}
+          {view === "teacherSalary" && <TeacherSalaryPage {...ctx} />}
           {view === "reports" && <ReportsPage {...ctx} />}
           {view === "users" && <UsersPage {...ctx} />}
           {view === "sync" && <SyncPage {...ctx} />}
@@ -642,13 +651,12 @@ function Dashboard({ students, classes, subjects, enrollments, tuitionConfig, te
   const doanhThu = daThu + revenueOther;
   const loiNhuan = doanhThu - chiPhi;
 
-  // last 6 months revenue/expense chart (học phí theo tháng được phân bổ + thu/chi khác)
+  // last 6 months revenue/expense chart (theo ngày thực thu tiền)
   const monthsArr = Array.from({ length: 6 }).map((_, i) => { const d = new Date(); d.setMonth(d.getMonth() - (5 - i)); return d.toISOString().slice(0, 7); });
   const chartData = monthsArr.map((m) => {
-    const tuitionRevenue = paymentAllocations.filter((a) => a.thang === m).reduce((s, a) => s + (Number(a.soTien) || 0), 0);
-    const revenueOther = transactions.filter((t) => t.loai === "Thu" && t.ngay.startsWith(m)).reduce((s, t) => s + (Number(t.soTien) || 0), 0);
-    const rev = tuitionRevenue + revenueOther;
-    const exp = transactions.filter((t) => t.loai === "Chi" && t.ngay.startsWith(m)).reduce((s, t) => s + (Number(t.soTien) || 0), 0);
+    const payM = payments.filter((p) => p.ngayThu.startsWith(m));
+    const rev = payM.reduce((s, p) => s + p.tongThucThu, 0) + transactions.filter((t) => t.loai === "Thu" && t.ngay.startsWith(m)).reduce((s, t) => s + t.soTien, 0);
+    const exp = transactions.filter((t) => t.loai === "Chi" && t.ngay.startsWith(m)).reduce((s, t) => s + t.soTien, 0);
     return { thang: m.slice(5) + "/" + m.slice(0, 4), "Doanh thu": rev, "Chi phí": exp };
   });
 
@@ -2027,4 +2035,265 @@ function SyncPage({ sheetsCfg, setSheetsCfg, logSync, syncLog, students, classes
     </div>
   );
 }
+
+/* ============================================================================
+   MODULE: TÍNH LƯƠNG GIÁO VIÊN
+============================================================================ */
+const SALARY_DEFAULT_GV_PERCENT = 70;
+
+function addMonthYM(ym, delta = 1) {
+  const [y, m] = String(ym || todayISO().slice(0, 7)).split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function salaryMonthLabel(ym) {
+  if (!ym) return "";
+  const [y, m] = ym.split("-");
+  return `Tháng ${Number(m)}/${y}`;
+}
+function salaryConfigFor(configs, lopId, monHocId, gvId, thang) {
+  return (configs || []).filter((c) =>
+    c.lopId === lopId && c.monHocId === monHocId &&
+    (!c.gvId || c.gvId === gvId) && c.effectiveFrom && c.effectiveFrom <= thang
+  ).sort((a, b) => {
+    const d = String(b.effectiveFrom).localeCompare(String(a.effectiveFrom));
+    if (d) return d;
+    return (b.gvId === gvId ? 1 : 0) - (a.gvId === gvId ? 1 : 0);
+  })[0] || { gvPercent: SALARY_DEFAULT_GV_PERCENT };
+}
+function salaryRowsForMonth({ thang, classId, teacherId, students, enrollments, classes, subjects, teachers, paymentAllocations, teacherSalaryConfigs, teacherSalaryPayments }) {
+  const keys = new Map();
+  (enrollments || []).forEach((en) => {
+    if (classId && en.lopId !== classId) return;
+    const st = students.find((s) => s.id === en.hocSinhId);
+    const lop = classes.find((c) => c.id === en.lopId);
+    if (!st || !lop || st.trangThai !== "Đang học" || thang < enrollStartMonth(st, lop)) return;
+    keys.set(`${en.lopId}__${en.monHocId}`, { lopId: en.lopId, monHocId: en.monHocId });
+  });
+  (paymentAllocations || []).filter((a) => a.thang === thang && (!classId || a.lopId === classId)).forEach((a) => {
+    keys.set(`${a.lopId}__${a.monHocId}`, { lopId: a.lopId, monHocId: a.monHocId });
+  });
+
+  return [...keys.values()].map(({ lopId, monHocId }) => {
+    const lop = classes.find((c) => c.id === lopId);
+    const subject = subjects.find((s) => s.id === monHocId);
+    const baseGvId = lop?.gvId || "";
+    const cfg = salaryConfigFor(teacherSalaryConfigs, lopId, monHocId, baseGvId, thang);
+    const gvId = cfg.gvId || baseGvId;
+    if (teacherId && gvId !== teacherId) return null;
+
+    const totalThu = (paymentAllocations || [])
+      .filter((a) => a.thang === thang && a.lopId === lopId && a.monHocId === monHocId)
+      .reduce((s, a) => s + (Number(a.soTien) || 0), 0);
+    const gvPercent = clamp(Number(cfg.gvPercent ?? SALARY_DEFAULT_GV_PERCENT), 0, 100);
+    const centerPercent = 100 - gvPercent;
+    const gvNhan = Math.round(totalThu * gvPercent / 100);
+    const centerAmount = Math.round(totalThu * centerPercent / 100);
+    const paid = (teacherSalaryPayments || [])
+      .filter((p) => p.thang === thang && p.lopId === lopId && p.monHocId === monHocId && p.gvId === gvId)
+      .reduce((s, p) => s + (Number(p.soTien) || 0), 0);
+    const conThieu = Math.max(0, gvNhan - paid);
+
+    return {
+      id: `${thang}_${lopId}_${monHocId}_${gvId}`, thang, lopId, monHocId, gvId,
+      tenLop: lop?.tenLop || "—", tenMon: subject?.ten || "—",
+      tenGV: teachers.find((t) => t.id === gvId)?.hoTen || "Chưa gán GV",
+      totalThu, gvPercent, centerPercent, gvNhan, centerAmount,
+      thuHo: gvNhan, conNhanGV: gvNhan, paid, conThieu: Math.max(0, gvNhan - paid),
+      status: paid <= 0 ? "Chưa thanh toán" : paid < gvNhan ? "Thanh toán một phần" : "Đã thanh toán",
+    };
+  }).filter(Boolean);
+}
+function salaryStatusBadge(status) {
+  return <Badge color={status === "Đã thanh toán" ? "green" : status === "Thanh toán một phần" ? "amber" : "red"}>{status}</Badge>;
+}
+function SalaryConfigEditor({ classes, subjects, teachers, configs, setConfigs }) {
+  const [lopId, setLopId] = useState(classes[0]?.id || "");
+  const [monHocId, setMonHocId] = useState("");
+  const [gvId, setGvId] = useState("");
+  const [gvPercent, setGvPercent] = useState(SALARY_DEFAULT_GV_PERCENT);
+  const [effectiveFrom, setEffectiveFrom] = useState(addMonthYM(todayISO().slice(0, 7), 1));
+  const lop = classes.find((c) => c.id === lopId);
+  const availableSubjects = subjects.filter((s) => (lop?.subjectIds || []).includes(s.id));
+
+  useEffect(() => {
+    if (!availableSubjects.some((s) => s.id === monHocId)) setMonHocId(availableSubjects[0]?.id || "");
+  }, [lopId, subjects.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = () => {
+    if (!lopId || !monHocId) return;
+    const pct = clamp(Number(gvPercent), 0, 100);
+    setConfigs((prev) => [...prev, {
+      id: uid("tlcfg"), lopId, monHocId, gvId: gvId || lop?.gvId || "",
+      gvPercent: pct, centerPercent: 100 - pct,
+      effectiveFrom: effectiveFrom || addMonthYM(todayISO().slice(0, 7), 1),
+      updatedAt: new Date().toISOString(),
+    }]);
+  };
+
+  return (
+    <Card className="p-4">
+      <p className="font-medium text-slate-700">Cấu hình tỷ lệ chia</p>
+      <p className="text-xs text-slate-400 mt-0.5 mb-3">Tỷ lệ mới chỉ có hiệu lực từ tháng chọn; tháng đã chốt không thay đổi.</p>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+        <Field label="Lớp"><Select value={lopId} onChange={(e) => setLopId(e.target.value)} options={classes.map((c) => ({ value: c.id, label: c.tenLop }))} /></Field>
+        <Field label="Môn"><Select value={monHocId} onChange={(e) => setMonHocId(e.target.value)} options={availableSubjects.map((s) => ({ value: s.id, label: s.ten }))} /></Field>
+        <Field label="Giáo viên"><Select value={gvId} onChange={(e) => setGvId(e.target.value)} options={[{ value: "", label: `Theo GV lớp${lop?.gvId ? "" : " (chưa gán)"}` }, ...teachers.map((t) => ({ value: t.id, label: t.hoTen }))]} /></Field>
+        <Field label="GV (%)"><TextInput type="number" min="0" max="100" value={gvPercent} onChange={(e) => setGvPercent(Number(e.target.value))} /></Field>
+        <Field label="Áp dụng từ tháng"><TextInput type="month" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></Field>
+      </div>
+      <div className="flex justify-end mb-4"><PrimaryButton icon={CheckCircle2} onClick={save}>Lưu tỷ lệ</PrimaryButton></div>
+      <div className="overflow-x-auto border border-slate-200 rounded-xl">
+        <table className="w-full text-sm min-w-[760px]">
+          <thead><tr className="bg-slate-50 text-slate-500 text-xs uppercase">
+            <th className="px-3 py-2 text-left">Lớp</th><th className="px-3 py-2 text-left">Môn</th><th className="px-3 py-2 text-left">GV</th><th className="px-3 py-2 text-right">GV %</th><th className="px-3 py-2 text-right">TT %</th><th className="px-3 py-2">Hiệu lực</th><th></th>
+          </tr></thead>
+          <tbody>{configs.slice().sort((a,b)=>String(b.effectiveFrom).localeCompare(String(a.effectiveFrom))).map((c) => (
+            <tr key={c.id} className="border-t border-slate-100">
+              <td className="px-3 py-2">{classes.find((x)=>x.id===c.lopId)?.tenLop || "—"}</td>
+              <td className="px-3 py-2">{subjects.find((x)=>x.id===c.monHocId)?.ten || "—"}</td>
+              <td className="px-3 py-2">{teachers.find((x)=>x.id===c.gvId)?.hoTen || "Theo GV lớp"}</td>
+              <td className="px-3 py-2 text-right text-teal-700 font-medium">{c.gvPercent}%</td>
+              <td className="px-3 py-2 text-right">{100-Number(c.gvPercent)}%</td>
+              <td className="px-3 py-2 text-center">{salaryMonthLabel(c.effectiveFrom)}</td>
+              <td className="px-3 py-2 text-right"><IconBtn icon={Trash2} tone="rose" title="Xoá" onClick={()=>setConfigs((p)=>p.filter((x)=>x.id!==c.id))}/></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+function SalaryPaymentForm({ row, existingPaid, onCancel, onSubmit }) {
+  const [soTien, setSoTien] = useState(Math.max(0, row.gvNhan - existingPaid));
+  const [ngay, setNgay] = useState(todayISO());
+  const [ghiChu, setGhiChu] = useState("");
+  const [err, setErr] = useState("");
+  const submit = () => {
+    if (!soTien || soTien <= 0) { setErr("Số tiền phải lớn hơn 0."); return; }
+    if (soTien > row.gvNhan - existingPaid) { setErr("Số tiền vượt quá khoản còn thiếu."); return; }
+    onSubmit({ soTien: Number(soTien), ngayThanhToan: ngay, ghiChu });
+  };
+  return <div>
+    <div className="grid sm:grid-cols-3 gap-3">
+      <Field label="Số tiền phải trả"><div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm">{vnd(row.gvNhan)}</div></Field>
+      <Field label="Đã thanh toán"><div className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm">{vnd(existingPaid)}</div></Field>
+      <Field label="Còn thiếu"><div className="px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg text-sm font-semibold text-rose-700">{vnd(row.gvNhan-existingPaid)}</div></Field>
+    </div>
+    <Field label="Số tiền thanh toán" required error={err}><TextInput type="number" min="0" value={soTien} onChange={(e)=>setSoTien(Number(e.target.value))}/></Field>
+    <Field label="Ngày thanh toán"><TextInput type="date" value={ngay} onChange={(e)=>setNgay(e.target.value)}/></Field>
+    <Field label="Ghi chú"><TextArea value={ghiChu} onChange={(e)=>setGhiChu(e.target.value)}/></Field>
+    <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+      <button onClick={onCancel} className="px-3.5 py-2 rounded-lg text-sm border border-slate-200">Huỷ</button>
+      <button onClick={submit} className="px-3.5 py-2 rounded-lg text-sm bg-teal-700 text-white">Lưu thanh toán</button>
+    </div>
+  </div>;
+}
+function printSalaryTable(rows, month, totals) {
+  const w = window.open("", "_blank");
+  if (!w) return;
+  w.document.write(`<html><head><title>Bảng lương ${month}</title><style>body{font-family:Arial;padding:24px;color:#1e293b}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border:1px solid #cbd5e1;padding:7px;font-size:12px}th{background:#f8fafc}</style></head><body>
+  <h2>BẢNG LƯƠNG GIÁO VIÊN — ${month}</h2><p>Tổng thu: ${vnd(totals.totalThu)} · GV nhận: ${vnd(totals.gvNhan)} · Đã thanh toán: ${vnd(totals.paid)} · Còn thiếu: ${vnd(totals.conThieu)}</p>
+  <table><thead><tr><th>Lớp</th><th>Môn</th><th>GV</th><th>Tổng thu</th><th>GV nhận</th><th>Nộp trung tâm</th><th>Thu hộ</th><th>Còn nhận GV</th><th>Đã thanh toán</th><th>Còn thiếu</th><th>Trạng thái</th></tr></thead><tbody>
+  ${rows.map(r=>`<tr><td>${r.tenLop}</td><td>${r.tenMon}</td><td>${r.tenGV}</td><td>${vnd(r.totalThu)}</td><td>${vnd(r.gvNhan)}</td><td>${vnd(r.centerAmount)}</td><td>${vnd(r.thuHo)}</td><td>${vnd(r.conNhanGV)}</td><td>${vnd(r.paid)}</td><td>${vnd(r.conThieu)}</td><td>${r.status}</td></tr>`).join("")}
+  </tbody></table><script>window.print()</script></body></html>`);
+  w.document.close();
+}
+function TeacherSalaryPage({
+  students, classes, teachers, subjects, enrollments, paymentAllocations, role,
+  teacherSalaryConfigs, setTeacherSalaryConfigs, teacherSalaryClosures, setTeacherSalaryClosures,
+  teacherSalaryPayments, setTeacherSalaryPayments,
+}) {
+  const editable = can(role, "teacherSalary", "full");
+  const thisMonth = todayISO().slice(0,7);
+  const [classId, setClassId] = useState("");
+  const [teacherId, setTeacherId] = useState("");
+  const [fromMonth, setFromMonth] = useState(thisMonth);
+  const [toMonth, setToMonth] = useState(thisMonth);
+  const [tab, setTab] = useState("salary");
+  const [paymentRow, setPaymentRow] = useState(null);
+  const [calcTick, setCalcTick] = useState(0);
+  const months = monthsBetweenInclusive(fromMonth, toMonth);
+  const rowsByMonth = useMemo(() => {
+    const out = {};
+    months.forEach((m) => {
+      const closed = teacherSalaryClosures.find((c)=>c.thang===m);
+      out[m] = closed?.rows || salaryRowsForMonth({ thang:m, classId, teacherId, students, enrollments, classes, subjects, teachers, paymentAllocations, teacherSalaryConfigs, teacherSalaryPayments });
+    });
+    return out;
+  }, [months.join(","), classId, teacherId, students, enrollments, classes, subjects, teachers, paymentAllocations, teacherSalaryConfigs, teacherSalaryPayments, teacherSalaryClosures, calcTick]);
+  const sumRows = (rows) => rows.reduce((a,r)=>({ totalThu:a.totalThu+r.totalThu, gvNhan:a.gvNhan+r.gvNhan, centerAmount:a.centerAmount+r.centerAmount, thuHo:a.thuHo+r.thuHo, conNhanGV:a.conNhanGV+r.conNhanGV, paid:a.paid+r.paid, conThieu:a.conThieu+r.conThieu }),{totalThu:0,gvNhan:0,centerAmount:0,thuHo:0,conNhanGV:0,paid:0,conThieu:0});
+  const grand = sumRows(months.flatMap((m)=>rowsByMonth[m]||[]));
+
+  function closeMonth(m) {
+    if (!editable || teacherSalaryClosures.some((c)=>c.thang===m)) return;
+    const rows = salaryRowsForMonth({ thang:m, classId, teacherId, students, enrollments, classes, subjects, teachers, paymentAllocations, teacherSalaryConfigs, teacherSalaryPayments });
+    setTeacherSalaryClosures((p)=>[...p,{id:uid("tlchot"),thang:m,closedAt:new Date().toISOString(),rows,filter:{classId,teacherId}}]);
+  }
+  function reopenMonth(m) {
+    if (!editable || !window.confirm(`Mở chốt ${salaryMonthLabel(m)}?`)) return;
+    setTeacherSalaryClosures((p)=>p.filter((c)=>c.thang!==m));
+  }
+  function exportSalary() {
+    const rows = months.flatMap((m)=>(rowsByMonth[m]||[]).map(r=>({Tháng:m,Lớp:r.tenLop,Môn:r.tenMon,"Giáo viên":r.tenGV,"Tổng thu":r.totalThu,"GV %":r.gvPercent,"Trung tâm %":r.centerPercent,"GV nhận":r.gvNhan,"Nộp trung tâm":r.centerAmount,"Thu hộ":r.thuHo,"Còn nhận GV":r.conNhanGV,"Đã thanh toán":r.paid,"Còn thiếu":r.conThieu,"Trạng thái":r.status})));
+    exportRows(rows,"BangLuongGV","BangLuongGiaoVien.xlsx");
+  }
+  const history = teacherSalaryPayments.filter((p)=>(!classId||p.lopId===classId)&&(!teacherId||p.gvId===teacherId)&&p.thang>=fromMonth&&p.thang<=toMonth).slice().sort((a,b)=>String(b.ngayThanhToan).localeCompare(String(a.ngayThanhToan)));
+
+  return <div className="space-y-5">
+    <SectionHeader title="Tính lương giáo viên" desc="Tự động lấy doanh thu học phí đã phân bổ theo lớp, môn và tháng." actions={<>
+      <button onClick={exportSalary} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-200"><FileSpreadsheet size={15}/> Xuất Excel</button>
+      <button onClick={()=>printSalaryTable(months.flatMap((m)=>rowsByMonth[m]||[]),months.length===1?salaryMonthLabel(months[0]):`${fromMonth} → ${toMonth}`,grand)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-slate-200"><Printer size={15}/> In bảng lương</button>
+    </>} />
+    <Card className="p-4">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+        <Field label="Chọn lớp"><Select value={classId} onChange={(e)=>setClassId(e.target.value)} options={[{value:"",label:"Tất cả lớp"},...classes.map(c=>({value:c.id,label:c.tenLop}))]}/></Field>
+        <Field label="Chọn giáo viên"><Select value={teacherId} onChange={(e)=>setTeacherId(e.target.value)} options={[{value:"",label:"Tất cả giáo viên"},...teachers.map(t=>({value:t.id,label:t.hoTen}))]}/></Field>
+        <Field label="Từ tháng"><TextInput type="month" value={fromMonth} onChange={(e)=>setFromMonth(e.target.value)}/></Field>
+        <Field label="Đến tháng"><TextInput type="month" value={toMonth} onChange={(e)=>setToMonth(e.target.value)}/></Field>
+        <button onClick={()=>{if(fromMonth>toMonth) alert("Tháng bắt đầu phải nhỏ hơn hoặc bằng tháng kết thúc."); else setCalcTick(v=>v+1);}} className="h-10 flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 text-white text-sm font-medium"><RefreshCw size={15}/> Tính/Cập nhật</button>
+      </div>
+    </Card>
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <KPICard icon={DollarSign} tone="sky" label="Tổng thu" value={vnd(grand.totalThu)}/>
+      <KPICard icon={BadgeCheck} tone="teal" label="GV nhận" value={vnd(grand.gvNhan)}/>
+      <KPICard icon={Wallet} tone="violet" label="Nộp trung tâm" value={vnd(grand.centerAmount)}/>
+      <KPICard icon={Receipt} tone="amber" label="Thu hộ" value={vnd(grand.thuHo)}/>
+      <KPICard icon={CheckCircle2} tone="emerald" label="Đã thanh toán" value={vnd(grand.paid)}/>
+      <KPICard icon={AlertTriangle} tone="rose" label="Còn thiếu" value={vnd(grand.conThieu)}/>
+    </div>
+    <div className="flex gap-2 border-b border-slate-200">
+      {["salary","config","payments"].map((x)=><button key={x} onClick={()=>setTab(x)} className={cx("px-3 py-2 text-sm font-medium",tab===x?"text-teal-700 border-b-2 border-teal-700":"text-slate-500")}>{x==="salary"?"Bảng lương":x==="config"?"Cấu hình tỷ lệ chia":"Lịch sử thanh toán GV"}</button>)}
+    </div>
+    {tab==="config" && (editable?<SalaryConfigEditor classes={classes} subjects={subjects} teachers={teachers} configs={teacherSalaryConfigs} setConfigs={setTeacherSalaryConfigs}/>:<Card className="p-4 text-sm text-slate-500">Bạn chỉ có quyền xem cấu hình tỷ lệ.</Card>)}
+    {tab==="salary" && <div className="space-y-4">
+      {months.map((m)=>{
+        const rows=rowsByMonth[m]||[], t=sumRows(rows), closed=teacherSalaryClosures.some((c)=>c.thang===m);
+        return <Card key={m} className="overflow-hidden">
+          <div className="p-4 flex items-center justify-between gap-2 border-b border-slate-100">
+            <div><p className="font-semibold">{salaryMonthLabel(m)}</p><p className="text-xs text-slate-400">{closed?"Đã chốt — giữ nguyên lịch sử":"Chưa chốt"}</p></div>
+            <div className="flex gap-2">{editable&&!closed&&<button onClick={()=>closeMonth(m)} className="px-3 py-1.5 rounded-lg text-sm bg-teal-700 text-white">Chốt tháng</button>}{editable&&closed&&<button onClick={()=>reopenMonth(m)} className="px-3 py-1.5 rounded-lg text-sm border border-amber-200 text-amber-700">Mở chốt</button>}</div>
+          </div>
+          <div className="overflow-x-auto"><table className="w-full text-sm min-w-[1180px]">
+            <thead><tr className="bg-slate-50 text-slate-500 text-xs uppercase">
+              <th className="px-3 py-2.5 text-left">Môn</th><th className="px-3 py-2.5 text-left">GV</th><th className="px-3 py-2.5 text-right">Tổng thu</th><th className="px-3 py-2.5 text-right">GV nhận</th><th className="px-3 py-2.5 text-right">Nộp trung tâm</th><th className="px-3 py-2.5 text-right">Thu hộ</th><th className="px-3 py-2.5 text-right">Còn nhận GV</th><th className="px-3 py-2.5 text-right">Đã thanh toán</th><th className="px-3 py-2.5 text-right">Còn thiếu</th><th className="px-3 py-2.5">Trạng thái</th><th></th>
+            </tr></thead>
+            <tbody>{rows.map(r=><tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/70">
+              <td className="px-3 py-2.5"><b>{r.tenMon}</b><div className="text-xs text-slate-400">{r.tenLop}</div></td><td className="px-3 py-2.5">{r.tenGV}<div className="text-xs text-slate-400">{r.gvPercent}% GV / {r.centerPercent}% TT</div></td>
+              <td className="px-3 py-2.5 text-right">{vnd(r.totalThu)}</td><td className="px-3 py-2.5 text-right text-teal-700 font-medium">{vnd(r.gvNhan)}</td><td className="px-3 py-2.5 text-right">{vnd(r.centerAmount)}</td><td className="px-3 py-2.5 text-right">{vnd(r.thuHo)}</td><td className="px-3 py-2.5 text-right">{vnd(r.conNhanGV)}</td><td className="px-3 py-2.5 text-right">{vnd(r.paid)}</td><td className="px-3 py-2.5 text-right text-rose-600 font-medium">{vnd(r.conThieu)}</td><td className="px-3 py-2.5">{salaryStatusBadge(r.status)}</td>
+              <td className="px-3 py-2.5">{editable&&r.conThieu>0&&<button onClick={()=>setPaymentRow(r)} className="px-2.5 py-1.5 rounded-lg text-xs bg-teal-50 text-teal-700">Thanh toán</button>}</td>
+            </tr>)}{!rows.length&&<tr><td colSpan="11"><EmptyState title="Chưa có doanh thu hoặc đăng ký môn" desc="Dữ liệu sẽ tự lấy từ Thu tiền khi có phân bổ học phí theo tháng."/></td></tr>}</tbody>
+            {rows.length>0&&<tfoot><tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold"><td colSpan="2" className="px-3 py-2.5">Tổng {salaryMonthLabel(m)}</td><td className="px-3 py-2.5 text-right">{vnd(t.totalThu)}</td><td className="px-3 py-2.5 text-right text-teal-700">{vnd(t.gvNhan)}</td><td className="px-3 py-2.5 text-right">{vnd(t.centerAmount)}</td><td className="px-3 py-2.5 text-right">{vnd(t.thuHo)}</td><td className="px-3 py-2.5 text-right">{vnd(t.conNhanGV)}</td><td className="px-3 py-2.5 text-right">{vnd(t.paid)}</td><td className="px-3 py-2.5 text-right text-rose-600">{vnd(t.conThieu)}</td><td colSpan="2"></td></tr></tfoot>}
+          </table></div>
+        </Card>;
+      })}
+      <Card className="p-4"><p className="font-semibold">Tổng lũy kế</p><div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3 text-sm"><div><span className="text-slate-400">Tổng thu</span><p className="font-semibold">{vnd(grand.totalThu)}</p></div><div><span className="text-slate-400">GV nhận</span><p className="font-semibold text-teal-700">{vnd(grand.gvNhan)}</p></div><div><span className="text-slate-400">Nộp trung tâm</span><p className="font-semibold">{vnd(grand.centerAmount)}</p></div><div><span className="text-slate-400">Đã thanh toán</span><p className="font-semibold">{vnd(grand.paid)}</p></div><div><span className="text-slate-400">Còn thiếu</span><p className="font-semibold text-rose-600">{vnd(grand.conThieu)}</p></div></div></Card>
+    </div>}
+    {tab==="payments"&&<Card className="p-4"><SectionHeader title="Lịch sử thanh toán GV" desc="Cho phép thanh toán nhiều lần cho cùng một bảng lương."/><div className="overflow-x-auto border border-slate-200 rounded-xl"><table className="w-full text-sm min-w-[900px]"><thead><tr className="bg-slate-50 text-slate-500 text-xs uppercase"><th className="px-3 py-2.5">Ngày</th><th className="px-3 py-2.5">Tháng</th><th className="px-3 py-2.5">Lớp / Môn</th><th className="px-3 py-2.5">GV</th><th className="px-3 py-2.5 text-right">Số tiền</th><th className="px-3 py-2.5">Ghi chú</th></tr></thead><tbody>{history.map(p=><tr key={p.id} className="border-t border-slate-100"><td className="px-3 py-2.5">{fmtDate(p.ngayThanhToan)}</td><td className="px-3 py-2.5">{salaryMonthLabel(p.thang)}</td><td className="px-3 py-2.5">{classes.find(c=>c.id===p.lopId)?.tenLop||"—"} / {subjects.find(s=>s.id===p.monHocId)?.ten||"—"}</td><td className="px-3 py-2.5">{teachers.find(t=>t.id===p.gvId)?.hoTen||"—"}</td><td className="px-3 py-2.5 text-right text-teal-700 font-medium">{vnd(p.soTien)}</td><td className="px-3 py-2.5">{p.ghiChu||"—"}</td></tr>)}{!history.length&&<tr><td colSpan="6"><EmptyState title="Chưa có lịch sử thanh toán" desc="Các lần thanh toán sẽ xuất hiện tại đây."/></td></tr>}</tbody></table></div></Card>}
+    <Modal open={!!paymentRow} onClose={()=>setPaymentRow(null)} title={`Thanh toán GV — ${paymentRow?.tenGV||""}`}>
+      {paymentRow&&<SalaryPaymentForm row={paymentRow} existingPaid={teacherSalaryPayments.filter(p=>p.thang===paymentRow.thang&&p.lopId===paymentRow.lopId&&p.monHocId===paymentRow.monHocId&&p.gvId===paymentRow.gvId).reduce((s,p)=>s+(Number(p.soTien)||0),0)} onCancel={()=>setPaymentRow(null)} onSubmit={(d)=>{setTeacherSalaryPayments(p=>[...p,{id:uid("tlpay"),thang:paymentRow.thang,lopId:paymentRow.lopId,monHocId:paymentRow.monHocId,gvId:paymentRow.gvId,...d,createdAt:new Date().toISOString()}]);setPaymentRow(null);}}/>}
+    </Modal>
+  </div>;
+}
+
 function flattenForSheet(row) { const o = {}; Object.entries(row).forEach(([k, v]) => { o[k] = typeof v === "object" ? JSON.stringify(v) : v; }); return o; }
