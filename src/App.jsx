@@ -1557,6 +1557,8 @@ function ThuTienPage({ students, classes, subjects, enrollments, payments, setPa
   const [tab, setTab] = useState("phaiThu");
   const [payModal, setPayModal] = useState(null); // student object
   const [detailPayment, setDetailPayment] = useState(null);
+  const [editPayment, setEditPayment] = useState(null);
+  const [cancelPayment, setCancelPayment] = useState(null);
   const [cfgFee, setCfgFee] = useState(tuitionConfig.hocPhiMon);
   const thisMonth = todayISO().slice(0, 7);
   const stuName = (id) => students.find((s) => s.id === id)?.hoTen || "—";
@@ -1607,12 +1609,19 @@ function ThuTienPage({ students, classes, subjects, enrollments, payments, setPa
     { key: "tongThucThu", label: "Thực thu", render: (r) => vnd(r.tongThucThu), exportValue: (r) => r.tongThucThu },
     { key: "phuongThuc", label: "Phương thức" },
     { key: "ghiChu", label: "Ghi chú" },
-    { key: "actions", label: "", render: (r) => (
+    ...(editable ? [{ key: "actions", label: "", render: (r) => (
+      <div className="flex gap-1">
+        <IconBtn icon={ClipboardList} tone="teal" title="Chi tiết phiếu thu" onClick={() => setDetailPayment(r)} />
+        <IconBtn icon={Pencil} tone="teal" title="Chỉnh sửa phiếu thu" onClick={() => setEditPayment(r)} />
+        <IconBtn icon={Printer} tone="slate" title="In phiếu thu" onClick={() => printReceipt(r, paymentAllocations, students, classes, subjects)} />
+        <IconBtn icon={XCircle} tone="rose" title="Hủy phiếu thu" onClick={() => setCancelPayment(r)} />
+      </div>
+    ) }] : [{ key: "actions", label: "", render: (r) => (
       <div className="flex gap-1">
         <IconBtn icon={ClipboardList} tone="teal" title="Chi tiết phiếu thu" onClick={() => setDetailPayment(r)} />
         <IconBtn icon={Printer} tone="slate" title="In phiếu thu" onClick={() => printReceipt(r, paymentAllocations, students, classes, subjects)} />
       </div>
-    ) },
+    ) }]),
   ];
 
   return (
@@ -1655,6 +1664,25 @@ function ThuTienPage({ students, classes, subjects, enrollments, payments, setPa
       <Modal open={!!detailPayment} onClose={() => setDetailPayment(null)} title={`Chi tiết phiếu thu — ${detailPayment?.maPhieu || ""}`}>
         {detailPayment && <ReceiptDetail payment={detailPayment} allocations={paymentAllocations.filter((a) => a.paymentId === detailPayment.id)} classes={classes} subjects={subjects} />}
       </Modal>
+
+      <Modal open={!!editPayment} onClose={() => setEditPayment(null)} title={`Chỉnh sửa phiếu thu — ${editPayment?.maPhieu || ""}`} wide>
+        {editPayment && <ReceiptEditForm payment={editPayment} students={students} classes={classes} subjects={subjects} enrollments={enrollments} tuitionConfig={tuitionConfig} paymentAllocations={paymentAllocations}
+          onCancel={() => setEditPayment(null)}
+          onSubmit={({ payment, allocations }) => {
+            setPayments((p) => p.map((x) => x.id === payment.id ? payment : x));
+            setPaymentAllocations((p) => [...p.filter((a) => a.paymentId !== payment.id), ...allocations]);
+            setEditPayment(null);
+          }} />}
+      </Modal>
+
+      <ConfirmDialog open={!!cancelPayment} onCancel={() => setCancelPayment(null)} text={`Hủy phiếu thu "${cancelPayment?.maPhieu || ""}" của ${stuName(cancelPayment?.hocSinhId)}? Toàn bộ phân bổ học phí của phiếu này sẽ được hoàn lại vào công nợ. Hành động này không thể hoàn tác.`}
+        onConfirm={() => {
+          const id = cancelPayment.id;
+          setPayments((p) => p.filter((x) => x.id !== id));
+          setPaymentAllocations((p) => p.filter((a) => a.paymentId !== id));
+          setDetailPayment((d) => d?.id === id ? null : d);
+          setCancelPayment(null);
+        }} />
     </div>
   );
 }
@@ -1752,6 +1780,69 @@ function ReceiptForm({ student, students, classes, subjects, enrollments, tuitio
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 mt-2">
         <button onClick={onCancel} className="px-3.5 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50">Huỷ</button>
         <button onClick={submit} className="px-3.5 py-2 rounded-lg text-sm bg-teal-700 text-white hover:bg-teal-800">Xác nhận thu tiền</button>
+      </div>
+    </div>
+  );
+}
+
+function ReceiptEditForm({ payment, students, classes, subjects, enrollments, tuitionConfig, paymentAllocations, onCancel, onSubmit }) {
+  const [ngayThu, setNgayThu] = useState(payment.ngayThu || todayISO());
+  const [phuongThuc, setPhuongThuc] = useState(payment.phuongThuc || "Tiền mặt");
+  const [ghiChu, setGhiChu] = useState(payment.ghiChu || "");
+  const originalAllocations = paymentAllocations.filter((a) => a.paymentId === payment.id);
+  const [thucThu, setThucThu] = useState(Number(payment.tongThucThu) || originalAllocations.reduce((s, a) => s + Number(a.soTien || 0), 0));
+  const [err, setErr] = useState("");
+  const stu = students.find((s) => s.id === payment.hocSinhId);
+  const thisMonth = todayISO().slice(0, 7);
+
+  const candidatePeriods = useMemo(() => {
+    if (!stu) return [];
+    return studentPeriods(stu, enrollments, tuitionConfig, thisMonth, classes)
+      .map((p) => {
+        const otherPaid = allocatedOf(p.hocSinhId, p.lopId, p.monHocId, p.thang, paymentAllocations.filter((a) => a.paymentId !== payment.id));
+        const own = originalAllocations.find((a) => a.lopId === p.lopId && a.monHocId === p.monHocId && a.thang === p.thang)?.soTien || 0;
+        return { ...p, daThuKhac: otherPaid, maxAlloc: Math.max(0, p.phaiThu - otherPaid), own };
+      })
+      .filter((p) => p.maxAlloc > 0)
+      .sort((a, b) => a.thang.localeCompare(b.thang) || a.monHocId.localeCompare(b.monHocId));
+  }, [stu, enrollments, tuitionConfig, thisMonth, classes, paymentAllocations, payment.id]);
+
+  function submit() {
+    const amt = Number(thucThu);
+    if (!amt || amt <= 0) { setErr("Số tiền thực thu phải lớn hơn 0"); return; }
+    if (!candidatePeriods.length) { setErr("Không còn kỳ học phí phù hợp để phân bổ"); return; }
+    const maxTotal = candidatePeriods.reduce((s, p) => s + p.maxAlloc, 0);
+    if (amt > maxTotal) { setErr(`Số tiền tối đa có thể phân bổ là ${vnd(maxTotal)}.`); return; }
+    let remain = amt;
+    const allocations = [];
+    candidatePeriods.forEach((p) => {
+      if (remain <= 0) return;
+      const pay = Math.min(remain, p.maxAlloc);
+      if (pay > 0) allocations.push({ id: uid("pb"), paymentId: payment.id, hocSinhId: payment.hocSinhId, lopId: p.lopId, monHocId: p.monHocId, thang: p.thang, soTien: pay });
+      remain -= pay;
+    });
+    onSubmit({ payment: { ...payment, ngayThu, phuongThuc, ghiChu, tongThucThu: amt }, allocations });
+  }
+
+  return (
+    <div>
+      <div className="grid sm:grid-cols-2 gap-x-4">
+        <Field label="Học sinh"><TextInput value={`${stu?.hoTen || "—"} (${stu?.maHS || ""})`} disabled /></Field>
+        <Field label="Ngày thu"><TextInput type="date" value={ngayThu} onChange={(e) => setNgayThu(e.target.value)} /></Field>
+        <Field label="Số tiền thực thu" required error={err}><TextInput type="number" value={thucThu} onChange={(e) => setThucThu(e.target.value)} /></Field>
+        <Field label="Phương thức"><Select value={phuongThuc} onChange={(e) => setPhuongThuc(e.target.value)} options={["Tiền mặt", "Chuyển khoản", "Ví điện tử"].map((v) => ({ value: v, label: v }))} /></Field>
+        <Field label="Ghi chú"><TextInput value={ghiChu} onChange={(e) => setGhiChu(e.target.value)} /></Field>
+      </div>
+      <p className="text-xs text-slate-400 mb-3">Khi đổi số tiền, hệ thống sẽ phân bổ lại phiếu này theo các kỳ học phí từ cũ đến mới và không tính phần tiền của chính phiếu đang sửa vào công nợ.</p>
+      <div className="border border-slate-200 rounded-lg overflow-hidden mb-3 overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px]">
+          <thead><tr className="bg-slate-50 text-slate-500 text-xs uppercase"><th className="px-3 py-2 text-left">Môn</th><th className="px-3 py-2 text-left">Tháng</th><th className="px-3 py-2 text-left">Đã thu khác</th><th className="px-3 py-2 text-left">Tối đa phân bổ</th></tr></thead>
+          <tbody>{candidatePeriods.map((p, i) => <tr key={i} className="border-t border-slate-100"><td className="px-3 py-2">{subjects.find((m) => m.id === p.monHocId)?.ten || "—"}</td><td className="px-3 py-2">{p.thang}</td><td className="px-3 py-2">{vnd(p.daThuKhac)}</td><td className="px-3 py-2">{vnd(p.maxAlloc)}</td></tr>)}</tbody>
+        </table>
+      </div>
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 mt-2">
+        <button onClick={onCancel} className="px-3.5 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50">Huỷ</button>
+        <button onClick={submit} className="px-3.5 py-2 rounded-lg text-sm bg-teal-700 text-white hover:bg-teal-800">Lưu thay đổi</button>
       </div>
     </div>
   );
