@@ -12,7 +12,7 @@ import {
   RefreshCw, Menu, ArrowUpDown, FileSpreadsheet, School, DoorOpen,
   TrendingUp, TrendingDown, DollarSign, CheckCircle2, XCircle, Clock3,
   BadgeCheck, PiggyBank, ClipboardList, ChevronDown, Printer, CloudCog,
-  BookOpen, Eye, Upload, FileUp, AlertCircle, Info,
+  BookOpen, Eye, Upload, FileUp, AlertCircle, Info, Lock, Unlock,
 } from "lucide-react";
 
 /* ============================================================================
@@ -24,6 +24,9 @@ const vnd = (n) => (Number(n) || 0).toLocaleString("vi-VN") + "đ";
 const fmtDate = (d) => { if (!d) return ""; const dt = new Date(d); return dt.toLocaleDateString("vi-VN"); };
 const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 function feeFor(cfg, thang) { const h = (cfg.history || []).filter((x) => x.from <= thang).sort((a, b) => b.from.localeCompare(a.from)); return h.length ? h[0].fee : cfg.hocPhiMon; }
+const isClosed = (c) => c?.trangThai === "Đã đóng";
+const classEndMonth = (c) => (isClosed(c) && c.ngayDong ? c.ngayDong.slice(0, 7) : null);
+const teacherOf = (c, monHocId) => c?.subjectTeachers?.[monHocId] || c?.gvId || "";
 function nextStudentCode(list) { let max = 0, w = 4; list.forEach((x) => { const m = /^HS(\d+)$/i.exec((x.maHS || "").trim()); if (m) { max = Math.max(max, Number(m[1])); w = Math.max(w, m[1].length); } }); return "HS" + String(max + 1).padStart(w, "0"); }
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
@@ -112,7 +115,8 @@ function studentPeriods(student, enrollments, tuitionConfig, uptoMonth, classes 
     const lop = classes.find((c) => c.id === en.lopId);
     const startMonth = enrollStartMonth(student, lop);
     if (startMonth > uptoMonth) return;
-    const months = monthsBetweenInclusive(startMonth, uptoMonth);
+    const endM = classEndMonth(lop);
+    const months = monthsBetweenInclusive(startMonth, endM && endM < uptoMonth ? endM : uptoMonth);
     months.forEach((thang) => periods.push({ hocSinhId: student.id, lopId: en.lopId, monHocId: en.monHocId, thang, phaiThu: feeFor(tuitionConfig, thang) }));
   });
   return periods;
@@ -130,7 +134,7 @@ function periodsForMonth(student, enrollments, tuitionConfig, thang, classes = [
   const myEnroll = enrollments.filter((e) => e.hocSinhId === student.id);
   if (!myEnroll.length) return [];
   return myEnroll
-    .filter((en) => thang >= enrollStartMonth(student, classes.find((c) => c.id === en.lopId)))
+    .filter((en) => { const l = classes.find((c) => c.id === en.lopId); return thang >= enrollStartMonth(student, l) && thang <= (classEndMonth(l) || "9999-99"); })
     .map((en) => ({ hocSinhId: student.id, lopId: en.lopId, monHocId: en.monHocId, thang, phaiThu: feeFor(tuitionConfig, thang) }));
 }
 function lastNMonths(n, uptoMonth) {
@@ -675,7 +679,7 @@ function Dashboard({ students, classes, subjects, enrollments, tuitionConfig, te
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <KPICard icon={Users} tone="teal" label="Học sinh đang học" value={activeStudents.length} sub={`${students.length} tổng số`} />
-        <KPICard icon={School} tone="sky" label="Lớp học" value={classes.length} sub={`${teachers.length} giáo viên`} />
+        <KPICard icon={School} tone="sky" label="Lớp học" value={classes.filter((c) => !isClosed(c)).length} sub={`${teachers.length} giáo viên`} />
         <KPICard icon={BookOpen} tone="violet" label="Môn học" value={subjects.length} />
         <KPICard icon={DollarSign} tone="amber" label="Học phí phải thu (tháng)" value={vnd(phaiThu)} />
         <KPICard icon={CheckCircle2} tone="teal" label="Học phí đã thu (tháng)" value={vnd(daThu)} />
@@ -873,7 +877,7 @@ function StudentForm({ preset, initial, classes, students, subjects, enrollments
         <Field label="Họ và tên" required error={errs.hoTen}><TextInput autoFocus={!initial} value={f.hoTen} onChange={(e) => set("hoTen", e.target.value)} /></Field>
         <Field label="Giới tính"><Select value={f.gioiTinh} onChange={(e) => set("gioiTinh", e.target.value)} options={[{ value: "Nam", label: "Nam" }, { value: "Nữ", label: "Nữ" }]} /></Field>
         <Field label="Ngày sinh"><TextInput type="date" value={f.ngaySinh} onChange={(e) => set("ngaySinh", e.target.value)} /></Field>
-        <Field label="Lớp học" required error={errs.lopId}><Select value={f.lopId} onChange={(e) => set("lopId", e.target.value)} options={classes.map((c) => ({ value: c.id, label: c.tenLop }))} /></Field>
+        <Field label="Lớp học" required error={errs.lopId}><Select value={f.lopId} onChange={(e) => set("lopId", e.target.value)} options={classes.filter((c) => !isClosed(c) || c.id === f.lopId).map((c) => ({ value: c.id, label: c.tenLop }))} /></Field>
         <Field label="Trạng thái"><Select value={f.trangThai} onChange={(e) => set("trangThai", e.target.value)} options={[{ value: "Đang học", label: "Đang học" }, { value: "Nghỉ học", label: "Nghỉ học" }]} /></Field>
         <Field label="Tên phụ huynh"><TextInput value={f.tenPH} onChange={(e) => set("tenPH", e.target.value)} /></Field>
         <Field label="SĐT phụ huynh" error={errs.sdtPH}><TextInput value={f.sdtPH} onChange={(e) => set("sdtPH", e.target.value)} placeholder="09xxxxxxxx" /></Field>
@@ -1211,28 +1215,34 @@ function ClassesPage({ classes, setClasses, students, subjects, setSubjects, enr
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
   const [detailClass, setDetailClass] = useState(null);
+  const [closing, setClosing] = useState(null);
+  const [showClosed, setShowClosed] = useState(false);
+  const shown = showClosed ? classes : classes.filter((c) => !isClosed(c));
+  const reopen = (c) => { if (window.confirm(`Mở lại lớp "${c.tenLop}"? Học phí sẽ được tính tiếp theo từng tháng.`)) setClasses((p) => p.map((x) => (x.id === c.id ? { ...x, trangThai: "Đang mở", ngayDong: "" } : x))); };
+  const sName = (id) => subjects.find((m) => m.id === id)?.ten || "";
   const nameOf = (arr, id, key = "hoTen") => arr.find((x) => x.id === id)?.[key] || "—";
   const subjNames = (ids) => (ids || []).map((id) => subjects.find((s) => s.id === id)?.ten).filter(Boolean);
   const columns = [
     { key: "maLop", label: "Mã lớp", sortable: true },
     { key: "tenLop", label: "Tên lớp", sortable: true, render: (r) => <button onClick={() => setDetailClass(r)} className="text-teal-700 font-medium hover:underline">{r.tenLop}</button> },
+    { key: "trangThai", label: "Trạng thái", render: (r) => <Badge color={isClosed(r) ? "slate" : "green"}>{isClosed(r) ? `Đã đóng ${fmtDate(r.ngayDong)}` : "Đang mở"}</Badge>, exportValue: (r) => (isClosed(r) ? "Đã đóng" : "Đang mở") },
     { key: "khoiId", label: "Khối", render: (r) => KHOI.find((k) => k.id === r.khoiId)?.ten, exportValue: (r) => KHOI.find((k) => k.id === r.khoiId)?.ten },
     { key: "ngayBatDau", label: "Ngày bắt đầu", sortable: true, render: (r) => r.ngayBatDau ? fmtDate(r.ngayBatDau) : "—", exportValue: (r) => r.ngayBatDau || "" },
     { key: "siso", label: "Sĩ số", render: (r) => students.filter((s) => s.lopId === r.id && s.trangThai === "Đang học").length, exportValue: (r) => students.filter((s) => s.lopId === r.id && s.trangThai === "Đang học").length },
     { key: "subjectIds", label: "Môn đang mở", render: (r) => (
       <div className="flex flex-wrap gap-1">{subjNames(r.subjectIds).map((n, i) => <Badge key={i} color="teal">{n}</Badge>)}{!subjNames(r.subjectIds).length && <span className="text-slate-300 text-xs">—</span>}</div>
     ), exportValue: (r) => subjNames(r.subjectIds).join(", ") },
-    { key: "gvId", label: "Giáo viên", render: (r) => nameOf(teachers, r.gvId), exportValue: (r) => nameOf(teachers, r.gvId) },
+    { key: "gvId", label: "Giáo viên theo môn", render: (r) => (r.subjectIds || []).length ? <div className="space-y-0.5">{r.subjectIds.map((id) => <div key={id} className="text-xs"><span className="text-slate-400">{sName(id)}:</span> {nameOf(teachers, teacherOf(r, id))}</div>)}</div> : nameOf(teachers, r.gvId), exportValue: (r) => (r.subjectIds || []).map((id) => `${sName(id)}: ${nameOf(teachers, teacherOf(r, id))}`).join(" | ") },
     { key: "phongId", label: "Phòng", render: (r) => nameOf(rooms, r.phongId, "tenPhong"), exportValue: (r) => nameOf(rooms, r.phongId, "tenPhong") },
-    { key: "lich", label: "Lịch học", render: (r) => (Array.isArray(r.lich) ? r.lich : []).map((l) => WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]).join(", "), exportValue: (r) => (Array.isArray(r.lich) ? r.lich : []).map((l) => `${WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]} ${l.gioBD}-${l.gioKT}`).join(" | ") },
+    { key: "lich", label: "Lịch học (theo môn)", render: (r) => <div className="space-y-0.5">{(Array.isArray(r.lich) ? r.lich : []).map((l, i) => <div key={i} className="text-xs">{WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]} {l.gioBD}-{l.gioKT}{l.monHocId ? ` · ${sName(l.monHocId)}` : ""}</div>)}</div>, exportValue: (r) => (Array.isArray(r.lich) ? r.lich : []).map((l) => `${WEEKDAYS[l.thu === 0 ? 0 : l.thu - 1]} ${l.gioBD}-${l.gioKT}${l.monHocId ? " " + sName(l.monHocId) : ""}`).join(" | ") },
     ...(editable ? [{ key: "actions", label: "", render: (r) => (
-      <div className="flex gap-1"><IconBtn icon={Eye} tone="slate" title="Xem học sinh" onClick={() => setDetailClass(r)} /><IconBtn icon={Pencil} tone="teal" onClick={() => setModal({ mode: "edit", data: r })} /><IconBtn icon={Trash2} tone="rose" onClick={() => setDel(r)} /></div>
+      <div className="flex gap-1"><IconBtn icon={Eye} tone="slate" title="Xem học sinh" onClick={() => setDetailClass(r)} /><IconBtn icon={isClosed(r) ? Unlock : Lock} tone="slate" title={isClosed(r) ? "Mở lại lớp" : "Đóng lớp"} onClick={() => (isClosed(r) ? reopen(r) : setClosing({ lop: r, ngay: todayISO() }))} /><IconBtn icon={Pencil} tone="teal" onClick={() => setModal({ mode: "edit", data: r })} /><IconBtn icon={Trash2} tone="rose" onClick={() => setDel(r)} /></div>
     ) }] : []),
   ];
   return (
     <div>
       <SectionHeader title="Danh sách lớp học" desc={`${classes.length} lớp — bấm vào tên lớp để xem danh sách học sinh, môn đăng ký và tình hình học phí`} actions={editable && <PrimaryButton onClick={() => setModal({ mode: "add", data: null })}>Thêm lớp</PrimaryButton>} />
-      <DataTable columns={columns} rows={classes} searchKeys={["maLop", "tenLop"]} exportName="LopHoc" emptyTitle="Chưa có lớp học nào" />
+      <DataTable columns={columns} rows={shown} searchKeys={["maLop", "tenLop"]} exportName="LopHoc" emptyTitle="Chưa có lớp học nào" filterBar={<label className="flex items-center gap-1.5 text-sm text-slate-600 shrink-0"><input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} /> Hiện lớp đã đóng</label>} />
       <Modal open={!!modal} onClose={() => setModal(null)} title={modal?.mode === "add" ? "Thêm lớp học" : "Sửa lớp học"} wide>
         {modal && <ClassForm initial={modal.data} classes={classes} teachers={teachers} assistants={assistants} rooms={rooms} subjects={subjects} setSubjects={setSubjects}
           onCancel={() => setModal(null)}
@@ -1241,6 +1251,13 @@ function ClassesPage({ classes, setClasses, students, subjects, setSubjects, enr
       <ConfirmDialog open={!!del} onCancel={() => setDel(null)} text={`Xoá lớp "${del?.tenLop}"? Học sinh trong lớp cần được chuyển lớp khác trước.`}
         onConfirm={() => { if (students.some((s) => s.lopId === del.id && s.trangThai === "Đang học")) { alert("Không thể xoá: lớp vẫn còn học sinh đang học."); setDel(null); return; } setClasses((p) => p.filter((c) => c.id !== del.id)); setDel(null); }} />
 
+      <Modal open={!!closing} onClose={() => setClosing(null)} title={`Đóng lớp ${closing?.lop?.tenLop || ""}`}>
+        {closing && <div className="space-y-3 text-sm">
+          <p className="text-slate-600">Lớp hiện có <b>{students.filter((x) => x.lopId === closing.lop.id && x.trangThai === "Đang học").length}</b> học sinh đang học. Sau khi đóng: lớp ẩn khỏi thời khoá biểu và danh sách chọn lớp mới; học phí chỉ tính đến hết tháng đóng; công nợ và phiếu thu cũ giữ nguyên. Có thể mở lại bất cứ lúc nào.</p>
+          <Field label="Ngày đóng lớp"><TextInput type="date" value={closing.ngay} onChange={(e) => setClosing({ ...closing, ngay: e.target.value })} /></Field>
+          <div className="flex justify-end gap-2"><button onClick={() => setClosing(null)} className="px-3.5 py-2 rounded-lg text-sm border border-slate-200">Huỷ</button><button disabled={!closing.ngay} onClick={() => { setClasses((p) => p.map((c) => (c.id === closing.lop.id ? { ...c, trangThai: "Đã đóng", ngayDong: closing.ngay } : c))); setClosing(null); }} className="px-3.5 py-2 rounded-lg text-sm bg-amber-600 text-white disabled:opacity-50">Xác nhận đóng lớp</button></div>
+        </div>}
+      </Modal>
       <Modal open={!!detailClass} onClose={() => setDetailClass(null)} title={`Lớp ${detailClass?.tenLop || ""} — Danh sách học sinh, môn đăng ký & học phí`} wide>
         {detailClass && <ClassRoster lop={detailClass} classes={classes} students={students} subjects={subjects} enrollments={enrollments} paymentAllocations={paymentAllocations} tuitionConfig={tuitionConfig} />}
       </Modal>
@@ -1347,12 +1364,12 @@ function StudentPaymentHistory({ student, classes, subjects, enrollments, paymen
 }
 
 function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, setSubjects, onCancel, onSubmit }) {
-  const [f, setF] = useState(() => ({ ...(initial || { maLop: "", tenLop: "", khoiId: KHOI[0].id, gvId: teachers[0]?.id, troId: assistants[0]?.id, phongId: rooms[0]?.id, hocPhiBuoi: 100000, ngayBatDau: todayISO(), mon: "", subjectIds: [], lich: [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }] }), lich: Array.isArray(initial?.lich) && initial.lich.length ? initial.lich : [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }], subjectIds: Array.isArray(initial?.subjectIds) ? initial.subjectIds : [] }));
+  const [f, setF] = useState(() => ({ ...(initial || { maLop: "", tenLop: "", khoiId: KHOI[0].id, gvId: teachers[0]?.id, troId: assistants[0]?.id, phongId: rooms[0]?.id, hocPhiBuoi: 100000, ngayBatDau: todayISO(), mon: "", subjectIds: [], lich: [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }] }), lich: Array.isArray(initial?.lich) && initial.lich.length ? initial.lich : [{ thu: 2, gioBD: "18:00", gioKT: "19:30" }], subjectTeachers: initial?.subjectTeachers || {}, subjectIds: Array.isArray(initial?.subjectIds) ? initial.subjectIds : [] }));
   const [errs, setErrs] = useState({});
   const [newSubj, setNewSubj] = useState("");
   function set(k, v) { setF((p) => ({ ...p, [k]: v })); }
   function setSlot(i, k, v) { setF((p) => ({ ...p, lich: p.lich.map((l, idx) => idx === i ? { ...l, [k]: v } : l) })); }
-  function addSlot() { setF((p) => ({ ...p, lich: [...p.lich, { thu: 2, gioBD: "18:00", gioKT: "19:30" }] })); }
+  function addSlot() { setF((p) => ({ ...p, lich: [...p.lich, { thu: 2, gioBD: "18:00", gioKT: "19:30", monHocId: p.subjectIds[0] || "" }] })); }
   function rmSlot(i) { setF((p) => ({ ...p, lich: p.lich.filter((_, idx) => idx !== i) })); }
   function toggleSubj(id) { setF((p) => ({ ...p, subjectIds: p.subjectIds.includes(id) ? p.subjectIds.filter((x) => x !== id) : (p.subjectIds.length >= 3 ? p.subjectIds : [...p.subjectIds, id]) })); }
   function addNewSubject() {
@@ -1375,8 +1392,10 @@ function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, se
     if (!f.hocPhiBuoi || f.hocPhiBuoi <= 0) e.hocPhiBuoi = "Học phí phải > 0";
     if (!f.subjectIds || f.subjectIds.length < 1 || f.subjectIds.length > 3) e.subjectIds = "Chọn 1 đến 3 môn học đang mở cho lớp";
     // schedule conflict: same phong or same gv, overlapping day+time, excluding self
-    const conflict = classes.find((c) => c.id !== f.id && (c.phongId === f.phongId || c.gvId === f.gvId) && (Array.isArray(c.lich) ? c.lich : []).some((s1) => (Array.isArray(f.lich) ? f.lich : []).some((s2) => s1.thu === s2.thu && timeOverlap(s1, s2))));
-    if (conflict) e.lich = `Trùng lịch với lớp "${conflict.tenLop}" (cùng phòng hoặc cùng giáo viên)`;
+    const slots = Array.isArray(f.lich) ? f.lich : [];
+    const conflict = classes.find((c) => c.id !== f.id && !isClosed(c) && (Array.isArray(c.lich) ? c.lich : []).some((s1) => slots.some((s2) => s1.thu === s2.thu && timeOverlap(s1, s2) && (c.phongId === f.phongId || teacherOf(c, s1.monHocId) === (f.subjectTeachers?.[s2.monHocId] || f.gvId)))));
+    if (slots.some((l) => !f.subjectIds.includes(l.monHocId))) e.lich = "Mỗi buổi học cần chọn môn học (trong các môn đang mở của lớp)";
+    else if (conflict) e.lich = `Trùng lịch với lớp "${conflict.tenLop}" (cùng phòng hoặc cùng giáo viên của môn)`;
     setErrs(e);
     return Object.keys(e).length === 0;
   }
@@ -1387,7 +1406,7 @@ function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, se
         <Field label="Tên lớp" required error={errs.tenLop}><TextInput value={f.tenLop} onChange={(e) => set("tenLop", e.target.value)} /></Field>
         <Field label="Khối"><Select value={f.khoiId} onChange={(e) => set("khoiId", e.target.value)} options={KHOI.map((k) => ({ value: k.id, label: k.ten }))} /></Field>
         <Field label="Môn học chính (dùng cho Điểm số/Đánh giá)" required error={errs.mon}><TextInput value={f.mon} onChange={(e) => set("mon", e.target.value)} /></Field>
-        <Field label="Giáo viên"><Select value={f.gvId} onChange={(e) => set("gvId", e.target.value)} options={teachers.map((t) => ({ value: t.id, label: t.hoTen }))} /></Field>
+        <Field label="Giáo viên chủ nhiệm (mặc định cho các môn)"><Select value={f.gvId} onChange={(e) => set("gvId", e.target.value)} options={teachers.map((t) => ({ value: t.id, label: t.hoTen }))} /></Field>
         <Field label="Trợ giảng"><Select value={f.troId} onChange={(e) => set("troId", e.target.value)} options={assistants.map((t) => ({ value: t.id, label: t.hoTen }))} /></Field>
         <Field label="Phòng học"><Select value={f.phongId} onChange={(e) => set("phongId", e.target.value)} options={rooms.map((t) => ({ value: t.id, label: t.tenPhong }))} /></Field>
         <Field label="Học phí / buổi (đ)" required error={errs.hocPhiBuoi}><TextInput type="number" value={f.hocPhiBuoi} onChange={(e) => set("hocPhiBuoi", Number(e.target.value))} /></Field>
@@ -1409,11 +1428,15 @@ function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, se
           <button type="button" onClick={addNewSubject} className="px-3 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50 shrink-0">+ Thêm môn</button>
         </div>
       </Field>
-      <Field label="Lịch học trong tuần" error={errs.lich}>
+      {f.subjectIds.length > 0 && <Field label="Giáo viên phụ trách từng môn">
+        <div className="space-y-2">{f.subjectIds.map((id) => <div key={id} className="flex items-center gap-2"><span className="w-32 text-sm text-slate-600 truncate">{subjects.find((m) => m.id === id)?.ten}</span><Select value={f.subjectTeachers[id] || f.gvId || ""} onChange={(e) => set("subjectTeachers", { ...f.subjectTeachers, [id]: e.target.value })} options={teachers.map((t) => ({ value: t.id, label: t.hoTen }))} className="flex-1" /></div>)}</div>
+      </Field>}
+      <Field label="Lịch học trong tuần (mỗi buổi chọn môn học)" error={errs.lich}>
         <div className="space-y-2">
           {f.lich.map((s, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
               <Select value={s.thu} onChange={(e) => setSlot(i, "thu", Number(e.target.value))} options={[{ value: 0, label: "CN" }, { value: 2, label: "Thứ 2" }, { value: 3, label: "Thứ 3" }, { value: 4, label: "Thứ 4" }, { value: 5, label: "Thứ 5" }, { value: 6, label: "Thứ 6" }, { value: 7, label: "Thứ 7" }]} className="w-28" />
+              <Select value={s.monHocId || ""} onChange={(e) => setSlot(i, "monHocId", e.target.value)} options={[{ value: "", label: "— Chọn môn —" }, ...subjects.filter((m) => f.subjectIds.includes(m.id)).map((m) => ({ value: m.id, label: m.ten }))]} className="w-40" />
               <TextInput type="time" value={s.gioBD} onChange={(e) => setSlot(i, "gioBD", e.target.value)} className="w-28" />
               <span className="text-slate-400 text-sm">đến</span>
               <TextInput type="time" value={s.gioKT} onChange={(e) => setSlot(i, "gioKT", e.target.value)} className="w-28" />
@@ -1425,7 +1448,7 @@ function ClassForm({ initial, classes, teachers, assistants, rooms, subjects, se
       </Field>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 mt-2">
         <button onClick={onCancel} className="px-3.5 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50">Huỷ</button>
-        <button onClick={() => validate() && onSubmit(f)} className="px-3.5 py-2 rounded-lg text-sm bg-teal-700 text-white hover:bg-teal-800">Lưu</button>
+        <button onClick={() => validate() && onSubmit({ ...f, subjectTeachers: Object.fromEntries(f.subjectIds.map((id) => [id, f.subjectTeachers[id] || f.gvId || ""])) })} className="px-3.5 py-2 rounded-lg text-sm bg-teal-700 text-white hover:bg-teal-800">Lưu</button>
       </div>
     </div>
   );
@@ -1503,18 +1526,20 @@ function GenericForm({ initial, fields, onCancel, onSubmit }) {
 /* ============================================================================
    SCHEDULE
 ============================================================================ */
-function SchedulePage({ classes, teachers, rooms }) {
+function SchedulePage({ classes: allClasses, teachers, rooms, subjects = [] }) {
+  const classes = useMemo(() => allClasses.filter((c) => !isClosed(c)), [allClasses]);
   const conflicts = useMemo(() => {
     const list = [];
     for (let i = 0; i < classes.length; i++) for (let j = i + 1; j < classes.length; j++) {
       const a = classes[i], b = classes[j];
-      if (a.phongId !== b.phongId && a.gvId !== b.gvId) continue;
-      (Array.isArray(a.lich) ? a.lich : []).forEach((s1) => (Array.isArray(b.lich) ? b.lich : []).forEach((s2) => { if (s1.thu === s2.thu && timeOverlap(s1, s2)) list.push({ a, b, s1, reason: a.phongId === b.phongId ? "Trùng phòng học" : "Trùng giáo viên" }); }));
+      
+      (Array.isArray(a.lich) ? a.lich : []).forEach((s1) => (Array.isArray(b.lich) ? b.lich : []).forEach((s2) => { if (s1.thu !== s2.thu || !timeOverlap(s1, s2)) return; const room = a.phongId === b.phongId; if (room || teacherOf(a, s1.monHocId) === teacherOf(b, s2.monHocId)) list.push({ a, b, s1, reason: room ? "Trùng phòng học" : "Trùng giáo viên" }); }));
     }
     return list;
   }, [classes]);
 
   const gvName = (id) => teachers.find((t) => t.id === id)?.hoTen || "—";
+  const subjName = (id) => subjects.find((m) => m.id === id)?.ten || "";
   const roomName = (id) => rooms.find((r) => r.id === id)?.tenPhong || "—";
   const dayList = [2, 3, 4, 5, 6, 7, 0];
 
@@ -1541,8 +1566,8 @@ function SchedulePage({ classes, teachers, rooms }) {
                 {classes.filter((c) => (Array.isArray(c.lich) ? c.lich : []).some((s) => s.thu === d)).flatMap((c) => (Array.isArray(c.lich) ? c.lich : []).filter((s) => s.thu === d).map((s, i) => (
                   <div key={c.id + i} className="rounded-lg bg-teal-50 border border-teal-100 p-2 text-[11px]">
                     <p className="font-semibold text-teal-800">{c.tenLop}</p>
-                    <p className="text-teal-600">{s.gioBD}-{s.gioKT}</p>
-                    <p className="text-teal-500">{gvName(c.gvId)} · {roomName(c.phongId)}</p>
+                    <p className="text-teal-600">{s.gioBD}-{s.gioKT}{s.monHocId && <b> · {subjName(s.monHocId)}</b>}</p>
+                    <p className="text-teal-500">{gvName(teacherOf(c, s.monHocId))} · {roomName(c.phongId)}</p>
                   </div>
                 )))}
                 {!classes.some((c) => (Array.isArray(c.lich) ? c.lich : []).some((s) => s.thu === d)) && <p className="text-[11px] text-slate-300 text-center pt-4">—</p>}
@@ -2189,7 +2214,7 @@ function salaryRowsForMonth({ thang, classId, teacherId, students, enrollments, 
   return [...keys.values()].map(({ lopId, monHocId }) => {
     const lop = classes.find((c) => c.id === lopId);
     const subject = subjects.find((s) => s.id === monHocId);
-    const baseGvId = lop?.gvId || "";
+    const baseGvId = teacherOf(lop, monHocId);
     const cfg = salaryConfigFor(teacherSalaryConfigs, lopId, monHocId, baseGvId, thang);
     const gvId = cfg.gvId || baseGvId;
     if (teacherId && gvId !== teacherId) return null;
